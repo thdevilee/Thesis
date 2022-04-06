@@ -1,0 +1,291 @@
+---
+title: "KNN simulation synthetic data"
+author: "Thomas Devilee"
+date: "06/04/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+Load data and packages
+```{r}
+library(parallel)
+library(doParallel)
+library(foreach)
+numCores <- detectCores()
+registerDoParallel(numCores)
+library(readxl)
+library(class)
+library(globaltest)
+library(ggplot2)
+library(glmnet)
+library(dplyr)
+library(MASS)
+library(gridExtra)
+set.seed(1979418)
+
+### function to read excel files in the current directory in the format "sim_X.xlsx"
+ReadData <- function(names){
+  out <- vector(mode = "list", length = length(names)) ### initialize empty list with length equal to the number of datasets to be read (names)
+  names(out) <- names ### assign list names
+  for(i in 1:length(names)){ ### for all datasets to be read
+    name <- paste0("sim_", names[i], ".xlsx")
+    data <- read_excel(name) ### read excel files
+    data <- data[order(data[["y"]]), ] ### order data based on y (label) value (small to big)
+    data[["y"]] <- ifelse(data[["y"]] == 0, FALSE, TRUE) ### replace label values with FALSE if 0 and TRUE if 0
+    out[[i]] <- data ### save this modified file to the list
+  }
+  return(out)
+}
+```
+
+```{r}
+data <- ReadData(c("linear", "moons", "circles"))
+```
+
+```{r}
+### function to create folds implicitly requires the group size per class has to be equal
+### if balanced is true (works only for two classes), the labels have to be sorted (low to high) 
+create_folds <- function(n_folds, labs, balanced = TRUE){
+  if(balanced){
+    if (any(order(as.numeric(labs[["y"]])) != seq(1, nrow(labs)))) stop("Data (labels) is not sorted") ### checks if the above requirments are met
+    reps1 <- (nrow(labs) - sum(as.numeric(labs[["y"]])))/n_folds
+    reps2 <- sum(as.numeric(labs[["y"]]))/n_folds
+    if (!is.int(reps1) | !is.int(reps2)) stop("Cannot balance folds")
+    folds1 <- rep(seq(1, n_folds), reps1) ### create n fold indexes for group 1
+    folds2 <- rep(seq(1, n_folds), reps2) ### create n fold indexes for group 2
+    folds <- c(sample(folds1), sample(folds2)) ### randomly assign indexes to each observation in a balanced fashion
+  } else{
+    folds <- sample(rep(seq(1, n_folds), nrow(labs)/n_folds)) ### randomly assign folds if balanced is false
+  }
+  return(folds)
+}
+
+### function to compute knn ordering matrix for a given distance matrix
+knn_mat <- function(dist_mat){
+  n <- nrow(dist_mat) ### number of observations
+  nn <- (n + 1) - t(apply(dist_mat, MARGIN = 1, FUN = rank)) ### ordering distance per observation
+  return(nn)
+}
+
+rename_folds <- function(folds){
+  digits <- sort(unique(folds))
+  for (i in 1:length(digits)){
+    folds[folds == digits[i]] <- i
+  }
+  return(folds)
+}
+
+InvPropWeight <- function(P){
+  n <- nrow(P)
+  I <- diag(n)
+  H <- matrix(1, ncol = n, nrow = n)*(1/n)
+  varP <- sum(diag(P %*% t(P) %*% (I - H)))
+  weight <- 1/varP
+  if(is.infinite(weight))  weight <- 0
+  return(weight)
+}
+
+XXT <- function(ord_mat, weights = NA){
+  weighting <- TRUE
+  k <- dim(ord_mat)[1]
+  if(all(is.na(weights))){
+    weighting <- FALSE
+    weights <- rep(1, k)
+  }
+  if(weighting & k != length(weights)) stop("Incorrect dimensions weights")
+  
+  weights <- cumsum(rev(weights)^2)
+  out <- matrix(data = NA, nrow = k, ncol = k)
+  diag(out) <- sum(weights)
+  for(i in 1:(k - 1)){
+    for(j in (i + 1):k){
+      out[i, j] <- sum(weights[pmin(ord_mat[i,], ord_mat[j,])])
+    }
+  }
+  out[lower.tri(out)] <- t(out)[lower.tri(out)]
+  return(out)
+}
+
+### function to compute p-values based on the partition matrix (for 1, ..., k neighbours and the overall test) for reps replications
+power_knn <- function(data, reps){
+  p_vals <- matrix(data = NA, nrow = reps, ncol = n) ### initialize empty matrix for p-values from global test 
+  
+  for (i in 1:reps){ ### for all replications
+    X <- vector(mode = "list", length = n) ### initialize empty list of length n to accomodate all k partition matrices
+    sub_data <- data[folds == i, ] ### select data in fold i
+    sub_X <- as.matrix(sub_data[, !names(sub_data) %in% "y"])
+    dist_mat <- as.matrix(dist(sub_X, diag = TRUE, upper = TRUE)) ### compute distance matrix
+    ord_mat <- knn_mat(dist_mat) ### compute ordering mat
+    for (j in 1:n){ ### for all 1, ..., k neighbours
+      X[[j]] <- ifelse(ord_mat > (n - j), 1, 0) ### compute partition matrix and save in list
+      p_vals[i, j] <- gt(y ~ 1, y ~ ., data = data.frame(X[[j]], y = sub_data["y"]))@result[1] ### compute gt statistic based on partition matrix
+    }
+  }
+  return(p_vals) ### return a matrix with p-values with reps rows and n + 1 columns, where the last column contain p-values from the overall gt
+}
+
+is.int <- function(x) x%%1 == 0
+```
+
+```{r}
+nestedcv.knn <- function(neighbours, folds, regs, labs){
+  n_folds <- max(folds)
+  res_outer <- numeric(n_folds)
+  fold_id <- seq(1, n_folds)
+  for(i in 1:n_folds){
+    res_inner <- matrix(NA, nrow = n_folds - 1, ncol = length(neighbours))
+    for(j in 1:(n_folds - 1)){
+      for(k in 1:length(neighbours)){
+        indx <- fold_id[fold_id != i] 
+        tmp <- class::knn(regs[(folds %in% indx[-j]),], regs[(folds == indx[j]),], labs[(folds %in% indx[-j]), , drop = TRUE], k = neighbours[k])
+        res_inner[j, k] <- mean(tmp != labs[folds == indx[j], , drop = TRUE])
+      }
+    }
+    res_inner <- apply(res_inner, MARGIN = 2, mean)
+    preds <- class::knn(regs[folds != i,], regs[folds == i,], labs[folds != i, , drop = TRUE], k = neighbours[which.min(res_inner)])
+    res_outer[i] <- mean(preds == labs[folds == i, , drop = TRUE])
+  }
+  return(mean(res_outer))
+}
+
+nestedcv.ridge <- function(folds, regs, labs){
+  n_folds <- max(folds)
+  res_outer <- numeric(n_folds)
+  for(i in 1:n_folds){
+    log_indx <- folds != i
+    regs_sub <- as.matrix(regs[log_indx, ])
+    labs_sub <- labs[log_indx, , drop = TRUE]
+    folds_sub <- rename_folds(folds[log_indx])
+    res_cv <- glmnet::cv.glmnet(x = regs_sub, y = labs_sub, type.measure = "mse", foldid = folds_sub, alpha = 0)
+    preds <- predict(res_cv, as.matrix(regs[folds == i,]), s = "lambda.min") >= 0.5
+    res_outer[i] <- mean(preds == labs[folds == i, , drop = TRUE])
+  }
+  return(mean(res_outer))
+}
+
+linear.gt <- function(regs, labs){
+  res <- gt(y~1, y~., data = data.frame(regs, y = labs))
+  return(res@result[1])
+}
+
+```
+
+```{r}
+### is double dipping?
+prop.knn_gt <- function(folds, regs, labs){
+  folds <- create_folds(n_folds = 2, labs = labs)
+  n_folds <- max(folds)
+  res <- numeric(n_folds)
+  for(i in 1:n_folds){
+    prop <- mean(labs[folds != i, , drop = TRUE])
+    dist_mat <- as.matrix(dist(regs[folds == i, ], diag = TRUE, upper = TRUE)) ### compute distance matrix
+    ord_mat <- knn_mat(dist_mat) ### compute ordering mat
+    P <- ifelse(ord_mat > sum(folds == i) - prop*sum(folds == i), 1, 0) ### compute partition matrix
+    res[i] <- gt(y ~ 1, y ~ ., data = cbind(P, labs[folds == i, ]))@result[1] ### compute gt statistic based on partition matrix
+  }
+  return(mean(res))
+}
+
+
+pval.knn_gt <- function(folds, regs, labs){
+  folds <- create_folds(n_folds = 2, labs = labs)
+  n_folds <- max(folds)
+  res <- numeric(n_folds)
+  for (i in 1:n_folds){
+    n_train <- sum(folds != i)
+    dist_mat <- as.matrix(dist(regs[folds != i, ], diag = TRUE, upper = TRUE)) ### compute distance matrix
+    ord_mat <- knn_mat(dist_mat) ### compute ordering mat
+    p_vals <- numeric(n_train)
+    for (j in 1:n_train){ ### for all 1, ..., k neighbours
+      P <- ifelse(ord_mat > (n_train - j), 1, 0) ### compute partition matrix and save in list
+      p_vals[j] <- log(globaltest::gt(y ~ 1, y ~ ., data = cbind(P, labs[folds != i, ]))@result[1]) ### compute gt statistic based on partition matrix
+    }
+    optimal_k <- which.min(p_vals)
+    n_test <- sum(folds == i)
+    dist_mat <- as.matrix(dist(regs[folds == i, ], diag = TRUE, upper = TRUE)) ### compute distance matrix
+    ord_mat <- knn_mat(dist_mat) ### compute ordering mat
+    P <- ifelse(ord_mat > (n_test - optimal_k), 1, 0)
+    res[i] <- gt(y ~ 1, y ~ ., data = cbind(P, labs[folds == i, ]))@result[1]
+  }
+  return(mean(res))
+}
+pval.knn_gt(folds, regs, labs, pckgs)
+
+overall.gt <- function(regs, labs, invweighted = FALSE){
+  n <- nrow(regs)
+  dist_mat <- as.matrix(dist(regs, diag = TRUE, upper = TRUE)) ### compute distance matrix
+  ord_mat <- knn_mat(dist_mat)
+  P <- P_iw <- vector(mode = "list", length = n)
+  for (j in 1:n){ ### for all 1, ..., k neighbours
+      P[[j]] <- ifelse(ord_mat > (n - j), 1, 0) ### compute partition matrix and save in list
+      if(invweighted){
+        weight <- InvPropWeight(P[[j]])
+        P_iw[[j]] <- weight * P[[j]]
+      }
+  }
+  P_enh <- do.call(cbind, P)
+  res <- globaltest::gt(y ~ 1, y ~ ., data = data.frame(P_enh, y = labs))@result[1]
+  if(invweighted){
+    Piw_enh <- do.call(cbind, P_iw)
+    res <- cbind(res, globaltest::gt(y ~ 1, y ~ ., data = data.frame(Piw_enh, y = labs))@result[1])
+  }
+  return(res)
+}
+tmp1 <- overall.gt(regs, labs, invweighted = FALSE)
+
+```
+
+```{r}
+pckgs <- c("create_folds", "linear.gt", "nestedcv.ridge", "nestedcv.knn", "prop.knn_gt", "pval.knn_gt", "rename_folds", "knn_mat", "is.int", "gt")
+SimExp <- function(n_reps, n_perms, data, pckgs){
+  labs <- data[, "y"]
+  regs <- data[, !names(data) %in% "y"]
+  indx <- create_folds(n_folds = n_reps, labs = labs, balanced = TRUE)
+  res <- matrix(data = NA, nrow = n_reps, ncol = 6)
+  names(res) <- c("linear.gt", "nestedcv.ridge", "nestedcv.knn", "prop.knn_gt", "pval.knn_gt")
+  
+  for(i in 1:max(indx)){
+    print(i)
+    sub_regs <- regs[indx == i,]
+    sub_labs <- labs[indx == i,]
+    folds <- create_folds(n_folds = 5, labs = sub_labs, balanced = TRUE)
+    res[i, 1] <- linear.gt(regs = sub_regs, labs = sub_labs)
+    ridge_stat <- nestedcv.ridge(folds = folds, regs = sub_regs, labs = sub_labs)
+    knn_stat <- nestedcv.knn(neighbours = c(5, 15), folds = folds, regs = sub_regs, labs = sub_labs)
+    res[i, 4] <- prop.knn_gt(folds = folds, regs = sub_regs, labs = sub_labs)
+    res[i, 5] <- pval.knn_gt(folds = folds, regs = sub_regs, labs = sub_labs)
+    res[i, 6] <- overall.gt(regs = sub_regs, labs = sub_labs)
+    
+    perm_mat <- foreach(j = 1:n_perms, .combine = "cbind", .export = pckgs) %dopar% {
+      perm_indx <- sample(nrow(sub_labs))
+      perm_regs <- sub_regs[perm_indx, ]
+      perm_folds <- create_folds(n_folds = 5, labs = sub_labs, balanced = TRUE)
+      perm_ridge <- nestedcv.ridge(folds = perm_folds, regs = perm_regs, labs = sub_labs)
+      perm_knn <- nestedcv.knn(neighbours = c(5, 15), folds = perm_folds, regs = perm_regs, labs = sub_labs)
+      matrix(c(perm_ridge, perm_knn), nrow = 2)
+    }
+    res[i, 2] <- 1- mean(ridge_stat >= perm_mat[1, ])
+    res[i, 3] <- 1- mean(knn_stat >= perm_mat[2, ])
+  }
+  return(res)
+}
+tmp <- SimExp(n_reps = 100, n_perms = 100, data = data[["circles"]][c(1:2000, 50001:52000), ], pckgs = pckgs)
+```
+```{r}
+EmpericalPower <- function(data){
+  out <- apply(data, 2, function(x) mean(x < 0.05))
+  return(out)
+}
+EmpericalPower(tmp)
+```
+
+
+
+```{r}
+regs <- data[["circles"]][c(1:50, 50001:50050), c("x1", "x2")]
+labs <- data[["circles"]][c(1:50, 50001:50050), c("y")]
+folds <- create_folds(n_folds = 2, labs = labs)
+```
