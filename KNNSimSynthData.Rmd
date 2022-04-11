@@ -304,9 +304,10 @@ globaltest::gt(y ~ 1, y ~ ., data = data.frame(tmp, y = labs))@result[1]
 ```
 
 ```{r}
-
+tmp <- matrix(rnorm(100), 10, 10)
+tmp <- data.frame(tmp, y = sample(c(0, 1), size = 10, replace = TRUE))
 # get null and alternative
-null <- .getNull(y ~ ., tmp, 10, "linear")
+null <- .getNull(y ~ 1, tmp, 10, "linear")
 alternative <- .getAlternative(y ~ ., tmp, 10)
 
 .getAlternative <- function(alternative, data, n) {
@@ -422,120 +423,44 @@ alternative <- .getAlternative(y ~ ., tmp, 10)
 ```
 
 ```{r}
-.lineartest <- function(response, Z, X, offset, dir, perms, fromGLM=FALSE) {
+Z <- null
+X <- alternative
+Y <- response
+m <- ncol(Z)
+n <- nrow(Z)
+form <- formula(.makeFormula(m>0, !is.null(NULL)))
+Y <- residuals(lm(form))
+sumYY <- sum(Y*Y)
+X <- X - Z %*% solve(crossprod(Z), crossprod(Z, X))
+# set columns numerically zero to exactly zero
+csm <- colSums(X*X)
+X[,csm < max(csm)*1e-14] <- 0
+norm.const <- sum(X * X) / 100
+xy <- crossprod(X, Y)
+S <- sum(xy * xy) / sumYY
+if (sumYY == 0) S <- 0
+lams <- eigen(crossprod(X), symmetric = TRUE, only.values=TRUE)$values
+if (length(lams) < n) lams <- c(lams, numeric(n-length(lams)))
+lams[1:(n-m)] <- lams[1:(n-m)] - S
+# term needed for mean and variance of S for z-score
+tr.term <- crossprod(X)
+var.num <- 2*sum(tr.term*tr.term)
+# mean and variance of S for z-score
+# use series approximation as given in Paolella (2003) 319:
+mu.num <- sum(lams) + (n-m)*S
+mu.den <- n-m
+var.den <- 2*(n-m)
+cov.term <- 2*mu.num
+ES <- (mu.num/mu.den) * (1 - cov.term/(mu.num*mu.den) + var.den/(mu.den^2))
+VarS <- (mu.num^2/mu.den^2) * (var.num/(mu.num^2)  + var.den/(mu.den^2) - 2*cov.term/(mu.num*mu.den))
+c(S = S/norm.const, ES = ES/norm.const, sdS = sqrt(VarS)/norm.const)
 
-  # establish dimensions of the problem
-  m <- ncol(Z)
-  n <- nrow(Z)
-
-  # fit the null model
-  form <- formula(.makeFormula(m>0, !is.null(offset)))
-  if (fromGLM)
-    Y <- response
-  else
-    Y <- residuals(lm(form))
-    return(Y)
-  sumYY <- sum(Y*Y)
-
-  # adjust the alternative
-  if (m > 0)
-    X <- X - Z %*% solve(crossprod(Z), crossprod(Z, X))
-  # set columns numerically zero to exactly zero
-  csm <- colSums(X*X)
-  X[,csm < max(csm)*1e-14] <- 0
-  return(X)
-
-  if (perms > 0) {
-    # all permutations if possible
-    allperms <- npermutations(Y) <= perms
-    if (allperms) {
-      random <- FALSE
-      permY <- allpermutations(Y)
-    } else {
-      # otherwise random permutations
-      random <- TRUE
-      permY <- replicate(perms-1, Y[sample(n)])
-    }
-  }
-
-  # Calculate the test statistic
-  # 1: asymptotic version
-  if (perms == 0) {
-    test <- function(subset, weights, calculateP = TRUE) {
-      if (!missing(subset))
-        X <- X[,subset,drop=FALSE]
-      p <- ncol(X)
-      if (p == 0) {
-        return(c(p = NA, S = NA, ES = NA, sdS = NA, ncov=0))
-      } else {
-        if(!missing(weights)) {
-          X <- X * matrix(sign(weights)*sqrt(abs(weights)), n, p, byrow = TRUE)
-        }
-          
-        if (p > n) {
-          XX <- crossprod(t(X))
-          if (dir) XX <- XX + dir * outer(rowSums(X), rowSums(X))
-          norm.const <- sum(diag(XX)) / 100
-          S <- sum(Y * (XX %*% Y)) / sum(Y*Y)
-          if (sumYY == 0) S <- 0
-          lams <- eigen(XX, symmetric = TRUE, only.values=TRUE)$values
-          lams[1:(n-m)] <- lams[1:(n-m)] - S
-  
-          # term needed for mean and variance of S for z-score
-          var.num <- 2*sum(XX*XX)
-  
-        } else {
-          if (dir && (p > 1)) X <- cbind(X, sqrt(dir) * rowSums(X))
-  
-          norm.const <- sum(X * X) / 100
-          xy <- crossprod(X, Y)
-          S <- sum(xy * xy) / sumYY
-          if (sumYY == 0) S <- 0
-          lams <- eigen(crossprod(X), symmetric = TRUE, only.values=TRUE)$values
-          if (length(lams) < n) lams <- c(lams, numeric(n-length(lams)))
-          lams[1:(n-m)] <- lams[1:(n-m)] - S
-  
-          # term needed for mean and variance of S for z-score
-          tr.term <- crossprod(X)
-          var.num <- 2*sum(tr.term*tr.term)
-        }
-  
-        # mean and variance of S for z-score
-        # use series approximation as given in Paolella (2003) 319:
-        mu.num <- sum(lams) + (n-m)*S
-        mu.den <- n-m
-        var.den <- 2*(n-m)
-        cov.term <- 2*mu.num
-        ES <- (mu.num/mu.den) * (1 - cov.term/(mu.num*mu.den) + var.den/(mu.den^2))
-        VarS <- (mu.num^2/mu.den^2) * (var.num/(mu.num^2)  + var.den/(mu.den^2) - 2*cov.term/(mu.num*mu.den))
-        
-        # repair for case all(X == 0)
-        if (norm.const == 0) {
-          norm.const <- 1
-          ES <- 0
-          VarS <- 0
-        }
-                     
-        # calculate the p-value
-        if (calculateP)
-          p.value <- .getP(lams)
-        else
-          p.value <- NA
-                                        
-        # give back
-        return(c(p = p.value, S = S/norm.const, ES = ES/norm.const, sdS = sqrt(VarS)/norm.const, ncov=p))
-      }
-    }
-  }
-}
 .makeFormula <- function(has.null, has.offset) {
   form <- "response ~ 0"
   if (has.null) form <- paste(form, "+Z")
   if (has.offset) form <- paste(form, "+offset(offset)")
   form
 }
-
-.lineartest(response, Z=null, X=alternative, offset=NULL, dir = FALSE, perms = 0)
 ```
 
 ```{r}
@@ -740,9 +665,9 @@ gt1 <- function(response, alternative, null, data, test.value,
   null <- null$null
   if (model == "multinomial" && !is.null(offset))
     stop("offset term and test.value not yet implemented for the multinomial model")
-  return(response)
+  return(alternative)
 }
 
-response <- gt1(y ~ 1, y ~. , data =tmp)
+alternative <- gt1(y ~ 1, y ~. , data =tmp)
 ```
 
