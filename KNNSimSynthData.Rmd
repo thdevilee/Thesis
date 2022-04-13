@@ -71,11 +71,11 @@ knn_mat <- function(dist_mat){
 }
 
 rename_folds <- function(folds){
-  digits <- sort(unique(folds))
-  for (i in 1:length(digits)){
-    folds[folds == digits[i]] <- i
+  digits <- sort(unique(folds)) ### sort all unique fold ids
+  for (i in 1:length(digits)){ ### for each element in unique sorted folds
+    folds[folds == digits[i]] <- i ### rename to 1, .., k (k = length(unique sorted folds))
   }
-  return(folds)
+  return(folds) 
 }
 
 InvPropWeight <- function(P, y){
@@ -93,23 +93,23 @@ InvPropWeight <- function(P, y){
 }
 
 XXT <- function(ord_mat, weights = NA){
-  weighting <- TRUE
-  k <- dim(ord_mat)[1]
-  if(all(is.na(weights))){
-    weighting <- FALSE
-    weights <- rep(1, k)
+  weighting <- TRUE ### weighting true by default
+  k <- dim(ord_mat)[1] ### number of observations/partition matrices
+  if(all(is.na(weights))){ ### if no weights specified
+    weighting <- FALSE ### set weighting to FALSE
+    weights <- rep(1, k) ### set al weights to 1
   }
-  if(weighting & k != length(weights)) stop("Incorrect dimensions weights")
+  if(weighting & k != length(weights)) stop("Incorrect dimensions weights") ### check if the dimensions of the weights match the number of partition matrices
   
-  weights <- cumsum(rev(weights)^2)
-  out <- matrix(data = NA, nrow = k, ncol = k)
-  diag(out) <- sum(weights)
-  for(i in 1:(k - 1)){
+  weights <- cumsum(rev(weights)^2) ### compute cumulative squared weights
+  out <- matrix(data = NA, nrow = k, ncol = k) ### initialize output matrix
+  diag(out) <- sum(weights) ### compute diagonal
+  for(i in 1:(k - 1)){ ### compute all elements in the upper triangle (without diagonal) of the output matrix
     for(j in (i + 1):k){
       out[i, j] <- sum(weights[pmin(ord_mat[i,], ord_mat[j,])])
     }
   }
-  out[lower.tri(out)] <- t(out)[lower.tri(out)]
+  out[lower.tri(out)] <- t(out)[lower.tri(out)] ### reflect upper triangle onto lower triangle
   return(out)
 }
 
@@ -135,115 +135,115 @@ is.int <- function(x) x%%1 == 0
 ```
 
 ```{r}
+### All functions below require specification of  the regressors (regs) as data frame and label (labs) as data frame. Some functions also require the fold id (folds) as vector
+
+### function to performed nested knn based on a specified number of neighbours
 nestedcv.knn <- function(neighbours, folds, regs, labs){
-  n_folds <- max(folds)
-  res_outer <- numeric(n_folds)
-  fold_id <- seq(1, n_folds)
-  for(i in 1:n_folds){
-    res_inner <- matrix(NA, nrow = n_folds - 1, ncol = length(neighbours))
-    for(j in 1:(n_folds - 1)){
-      for(k in 1:length(neighbours)){
-        indx <- fold_id[fold_id != i] 
-        tmp <- class::knn(regs[(folds %in% indx[-j]),], regs[(folds == indx[j]),], labs[(folds %in% indx[-j]), , drop = TRUE], k = neighbours[k])
-        res_inner[j, k] <- mean(tmp != labs[folds == indx[j], , drop = TRUE])
+  n_folds <- max(folds) ### total number of folds
+  res_outer <- numeric(n_folds) ### initialize outerloop output
+  fold_id <- seq(1, n_folds) ### create fold numbers for innerloop
+  for(i in 1:n_folds){  ### for all folds
+    res_inner <- matrix(NA, nrow = n_folds - 1, ncol = length(neighbours)) ### initialize innerloop output matrix
+    for(j in 1:(n_folds - 1)){ ### for all folds - 1 (excluding one outer validations set)
+      for(k in 1:length(neighbours)){ ### for every neighbour
+        indx <- fold_id[fold_id != i]  ### exclude outer validation set
+        tmp <- class::knn(regs[(folds %in% indx[-j]),], regs[(folds == indx[j]),], labs[(folds %in% indx[-j]), , drop = TRUE], k = neighbours[k]) ### train on n_folds - 2
+        res_inner[j, k] <- mean(tmp != labs[folds == indx[j], , drop = TRUE]) ### validate on innerloop validation set
       }
     }
-    res_inner <- apply(res_inner, MARGIN = 2, mean)
-    preds <- class::knn(regs[folds != i,], regs[folds == i,], labs[folds != i, , drop = TRUE], k = neighbours[which.min(res_inner)])
-    res_outer[i] <- mean(preds == labs[folds == i, , drop = TRUE])
+    res_inner <- apply(res_inner, MARGIN = 2, mean) ### compute average misclassification rate over the innerloop folds
+    preds <- class::knn(regs[folds != i,], regs[folds == i,], labs[folds != i, , drop = TRUE], k = neighbours[which.min(res_inner)]) ### train on n_folds - 1 for the k with the smallest misclassification rate
+    res_outer[i] <- mean(preds == labs[folds == i, , drop = TRUE])  ### compute average accuracy on outer validation set
   }
   return(mean(res_outer))
 }
-
+### function to compute perform nested ridge
 nestedcv.ridge <- function(folds, regs, labs){
-  n_folds <- max(folds)
-  res_outer <- numeric(n_folds)
-  for(i in 1:n_folds){
-    log_indx <- folds != i
-    regs_sub <- as.matrix(regs[log_indx, ])
-    labs_sub <- labs[log_indx, , drop = TRUE]
-    folds_sub <- rename_folds(folds[log_indx])
-    res_cv <- glmnet::cv.glmnet(x = regs_sub, y = labs_sub, type.measure = "mse", foldid = folds_sub, alpha = 0)
-    preds <- predict(res_cv, as.matrix(regs[folds == i,]), s = "lambda.min") >= 0.5
-    res_outer[i] <- mean(preds == labs[folds == i, , drop = TRUE])
+  n_folds <- max(folds) ### number of folds
+  res_outer <- numeric(n_folds) ### initialize output 
+  for(i in 1:n_folds){ 
+    log_indx <- folds != i ### create logical index for subset of the data
+    regs_sub <- as.matrix(regs[log_indx, ]) ### select regressor and put in right format
+    labs_sub <- labs[log_indx, , drop = TRUE] ### select labels
+    folds_sub <- rename_folds(folds[log_indx]) ### rename folds to 1, ... k - 1 (required for cv.glment)
+    res_cv <- glmnet::cv.glmnet(x = regs_sub, y = labs_sub, type.measure = "mse", foldid = folds_sub, alpha = 0) ### compute optimal lambda
+    preds <- predict(res_cv, as.matrix(regs[folds == i,]), s = "lambda.min") >= 0.5 ### make predictions for the validation set from a model with the optimal lambda
+    res_outer[i] <- mean(preds == labs[folds == i, , drop = TRUE]) ### compute average accuracy on outer validation set
   }
   return(mean(res_outer))
 }
-
+### function to compute linear global test
 linear.gt <- function(regs, labs){
-  res <- gt(y~1, y~., data = data.frame(regs, y = labs))
-  return(res@result[1])
+  res <- gt(y~1, y~., data = data.frame(regs, y = labs)) ### linear global test
+  return(res@result[1])  ### return p-value
 }
 
 ```
 
 ```{r}
-### is double dipping?
+### function to perform global test on a partition matrix which corresponds to the (smallest) fraction of labels times the number of observations (rounded)
 prop.knn_gt <- function(regs, labs){
-  prop <- mean(labs[["y"]])
-  prop <- min(prop, 1 - prop)
+  prop <- mean(labs[["y"]]) ### compute fraction of labels
+  prop <- min(prop, 1 - prop) ### select the smallest fraction
   dist_mat <- as.matrix(dist(regs, diag = TRUE, upper = TRUE)) ### compute distance matrix
   ord_mat <- knn_mat(dist_mat) ### compute ordering mat
-  P <- ifelse(ord_mat > nrow(regs) - prop*nrow(regs), 1, 0) ### compute partition matrix
+  P <- ifelse(ord_mat > nrow(regs) - prop*nrow(regs), 1, 0) ### compute partition matrix corresponding to the smallest fraction of labels
   res <- gt(y ~ 1, y ~ ., data = cbind(P, labs))@result[1] ### compute gt statistic based on partition matrix
   return(res)
 }
 
-
+### function to perform the global test on the partition matrix of the validation set for the value of k which corresponds to the smallest p-value in the training set (splits data in two)
 pval.knn_gt <- function(regs, labs){
-  i <- 1
-  folds <- create_folds(n_folds = 2, labs = labs)
-  n_train <- sum(folds != i)
+  i <- 1 ### arbitrarily choose a validation fold
+  folds <- create_folds(n_folds = 2, labs = labs) ### create folds such that the groups are balanced
+  n_train <- sum(folds != i) ### compute the number of observations in each folds
   dist_mat <- as.matrix(dist(regs[folds != i, ], diag = TRUE, upper = TRUE)) ### compute distance matrix
   ord_mat <- knn_mat(dist_mat) ### compute ordering mat
-  p_vals <- numeric(n_train)
-  for (j in 1:n_train){ ### for all 1, ..., k neighbours
+  p_vals <- numeric(n_train) ### initialize vector for p-values
+  p_vals[1] <- 1 ### skip p-value for partition matrix which corresponds to k = 1
+  for (j in 2:n_train){ ### for all 2, ..., k neighbours
     P <- ifelse(ord_mat > (n_train - j), 1, 0) ### compute partition matrix and save in list
     p_vals[j] <- log(globaltest::gt(y ~ 1, y ~ ., data = cbind(P, labs[folds != i, ]))@result[1]) ### compute gt statistic based on partition matrix
     }
-    optimal_k <- which.min(p_vals)
-    n_test <- sum(folds == i)
+    optimal_k <- which.min(p_vals) ### select k which corresponds to smallest p-value
+    n_test <- sum(folds == i) ### compute number of observations in validation set
     dist_mat <- as.matrix(dist(regs[folds == i, ], diag = TRUE, upper = TRUE)) ### compute distance matrix
     ord_mat <- knn_mat(dist_mat) ### compute ordering mat
-    P <- ifelse(ord_mat > (n_test - optimal_k), 1, 0)
-    res <- gt(y ~ 1, y ~ ., data = cbind(P, labs[folds == i, ]))@result[1]
+    P <- ifelse(ord_mat > (n_test - optimal_k), 1, 0) ### compute partition matrix for optimal k
+    res <- gt(y ~ 1, y ~ ., data = cbind(P, labs[folds == i, ]))@result[1] ### perform global test
   return(res)
 }
-pval.knn_gt(regs, labs)
-
+### function to perform unweighted and inverse weighted overall global test
 overall.gt <- function(regs, labs, invweighted = FALSE){
-  n <- nrow(regs)
+  n <- nrow(regs) ### compute number of observations
   dist_mat <- as.matrix(dist(regs, diag = TRUE, upper = TRUE)) ### compute distance matrix
-  ord_mat <- knn_mat(dist_mat)
+  ord_mat <- knn_mat(dist_mat) ### compute ordering matrix
   weights <- numeric(n)
-  if (invweighted){ ### for all 1, ..., k neighbours
-    for(i in 1:n){
-      P <- ifelse(ord_mat > (n - i), 1, 0)
-      weights[i] <- InvPropWeight(P, labs)
+  if (invweighted){ ### if inverse weights
+    for(i in 1:n){ ### for all 1, ..., k neighbours
+      P <- ifelse(ord_mat > (n - i), 1, 0) ### compute partition matrix
+      weights[i] <- InvPropWeight(P, labs) ### weight according to inverse of variance of partition matrix
       }
   }
-  return(weights)
-  X <- t(chol(XXT(ord_mat = ord_mat)))
-  res <- globaltest::gt(y ~ 1, y ~ ., data = data.frame(X, y = labs))@result[1]
-  if(invweighted){
-    X_iw <- t(chol(XXT(ord_mat = ord_mat, weights = weights)))
-    res <- cbind(res, globaltest::gt(y ~ 1, y ~ ., data = data.frame(X_iw, y = labs))@result[1])
+  X <- t(chol(XXT(ord_mat = ord_mat))) ### perform cholesky decomosition on XXT to increase computation performance
+  res <- globaltest::gt(y ~ 1, y ~ ., data = data.frame(X, y = labs))@result[1] ### perform global test on cholesky decomposition
+  if(invweighted){ ### if inverse weights
+    X_iw <- t(chol(XXT(ord_mat = ord_mat, weights = weights))) ### perform cholesky decomosition on weighted XXT to increase computation performance
+    res <- cbind(res, globaltest::gt(y ~ 1, y ~ ., data = data.frame(X_iw, y = labs))@result[1]) #### perform global test on inversely weighted partition matrices
   }
   return(res)
 }
-
-tmp2 <- overall.gt(regs, labs, invweighted = TRUE)
 
 ```
 
 ```{r}
-pckgs <- c("create_folds", "linear.gt", "nestedcv.ridge", "nestedcv.knn", "prop.knn_gt", "pval.knn_gt", "rename_folds", "knn_mat", "is.int", "gt")
+pckgs <- c("create_folds", "linear.gt", "nestedcv.ridge", "nestedcv.knn", "prop.knn_gt", "pval.knn_gt", "overall.gt", "rename_folds", "knn_mat", "is.int", "gt")
 SimExp <- function(n_reps, n_perms, data, pckgs){
   labs <- data[, "y"]
   regs <- data[, !names(data) %in% "y"]
   indx <- create_folds(n_folds = n_reps, labs = labs, balanced = TRUE)
   res <- matrix(data = NA, nrow = n_reps, ncol = 6)
-  names(res) <- c("linear.gt", "nestedcv.ridge", "nestedcv.knn", "prop.knn_gt", "pval.knn_gt")
+  names(res) <- c("linear.gt", "nestedcv.ridge", "nestedcv.knn", "prop.knn_gt", "pval.knn_gt", "overall.gt")
   
   for(i in 1:max(indx)){
     print(i)
@@ -271,7 +271,9 @@ SimExp <- function(n_reps, n_perms, data, pckgs){
   return(res)
 }
 tmp <- SimExp(n_reps = 100, n_perms = 100, data = data[["circles"]][c(1:2000, 50001:52000), ], pckgs = pckgs)
+tmp1 <- SimExp(n_reps = 100, n_perms = 100, data = data[["linear"]][c(1:2000, 50001:52000), ], pckgs = pckgs)
 ```
+
 ```{r}
 EmpericalPower <- function(data){
   out <- apply(data, 2, function(x) mean(x < 0.05))
