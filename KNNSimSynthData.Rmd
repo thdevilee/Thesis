@@ -48,14 +48,16 @@ data <- ReadData(c("linear", "moons", "circles"))
 ```{r}
 ### function to create folds implicitly requires the group size per class has to be equal
 ### if balanced is true (works only for two classes), the labels have to be sorted (low to high) 
-create_folds <- function(n_folds, labs, balanced = TRUE){
+create_folds <- function(n_folds, labs, balanced = TRUE, force = FALSE){
   if(balanced){
     if (any(order(as.numeric(labs[["y"]])) != seq(1, nrow(labs)))) stop("Data (labels) is not sorted") ### checks if the above requirments are met
-    reps1 <- (nrow(labs) - sum(as.numeric(labs[["y"]])))/n_folds
-    reps2 <- sum(as.numeric(labs[["y"]]))/n_folds
-    if (!is.int(reps1) | !is.int(reps2)) stop("Cannot balance folds")
-    folds1 <- rep(seq(1, n_folds), reps1) ### create n fold indexes for group 1
-    folds2 <- rep(seq(1, n_folds), reps2) ### create n fold indexes for group 2
+    n1 <- nrow(labs) - sum(as.numeric(labs[["y"]]))
+    n2 <- sum(as.numeric(labs[["y"]]))
+    reps1 <- n1/n_folds
+    reps2 <- n2/n_folds
+    if ((!is.int(reps1) | !is.int(reps2)) & !force) stop("Cannot balance folds")
+    folds1 <- rep(seq(1, n_folds), ceiling(reps1))[1:n1] ### create n fold indexes for group 1
+    folds2 <- rep(seq(1, n_folds), ceiling(reps2))[1:n2] ### create n fold indexes for group 2
     folds <- c(sample(folds1), sample(folds2)) ### randomly assign indexes to each observation in a balanced fashion
   } else{
     folds <- sample(rep(seq(1, n_folds), nrow(labs)/n_folds)) ### randomly assign folds if balanced is false
@@ -79,16 +81,31 @@ rename_folds <- function(folds){
 }
 
 InvPropWeight <- function(P, y){
-  n <- nrow(P)
-  I <- diag(n)
-  H <- matrix(1, ncol = n, nrow = n)*(1/n)
-  y <- as.matrix(y)
-  XXT <- P %*% t(P) 
-  dgXXT <- matrix(0, ncol = n, nrow = n)
-  diag(dgXXT) <- diag(XXT)
-  varP <- t(y) %*% (I - H) %*% (XXT - dgXXT) %*% (I - H) %*% y
-  weight <- 1/varP
-  if(is.infinite(weight))  weight <- 0
+  data <- data.frame(P, y = y)
+  Z <- model.matrix(y ~ 1, data = data)
+  X <- model.matrix(y ~ 0 + ., data = data)
+  m <- ncol(Z)
+  n <- nrow(Z)
+  y <- residuals(lm(y ~ 1, data = data))
+  sumyy <- sum(y*y)
+  X <- X - Z %*% solve(crossprod(Z), crossprod(Z, X))
+  csm <- colSums(X*X)
+  X[,csm < max(csm)*1e-14] <- 0
+  xy <- crossprod(X, y)
+  S <- sum(xy * xy) / sumyy
+  if (sumyy == 0) S <- 0
+  lams <- eigen(crossprod(X), symmetric = TRUE, only.values=TRUE)$values
+  if (length(lams) < n) lams <- c(lams, numeric(n-length(lams)))
+  lams[1:(n-m)] <- lams[1:(n-m)] - S
+  tr.term <- crossprod(X)
+  var.num <- 2*sum(tr.term*tr.term)
+  mu.num <- sum(lams) + (n-m)*S
+  mu.den <- n-m
+  var.den <- 2*(n-m)
+  cov.term <- 2*mu.num
+  VarS <- (mu.num^2/mu.den^2) * (var.num/(mu.num^2)  + var.den/(mu.den^2) - 2*cov.term/(mu.num*mu.den))
+  weight <- 1/VarS
+  if (is.nan(weight) | weight > 10^6) weight <- 0
   return(weight)
 }
 
@@ -132,16 +149,23 @@ power_knn <- function(data, reps){
 }
 
 is.int <- function(x) x%%1 == 0
+
+EmpericalPower <- function(data){
+  out <- apply(data, 2, function(x) mean(x < 0.05))
+  return(out)
+}
 ```
 
 ```{r}
 ### All functions below require specification of  the regressors (regs) as data frame and label (labs) as data frame. Some functions also require the fold id (folds) as vector
 
 ### function to performed nested knn based on a specified number of neighbours
-nestedcv.knn <- function(neighbours, folds, regs, labs){
+nestedcv.knn <- function(folds, regs, labs){
   n_folds <- max(folds) ### total number of folds
   res_outer <- numeric(n_folds) ### initialize outerloop output
   fold_id <- seq(1, n_folds) ### create fold numbers for innerloop
+  n_trin <- ((n_folds - 2)/n_folds)*nrow(regs)
+  neighbours <- round(seq(1, n_trin, length.out = round(sqrt(n_trin))))
   for(i in 1:n_folds){  ### for all folds
     res_inner <- matrix(NA, nrow = n_folds - 1, ncol = length(neighbours)) ### initialize innerloop output matrix
     for(j in 1:(n_folds - 1)){ ### for all folds - 1 (excluding one outer validations set)
@@ -181,6 +205,31 @@ linear.gt <- function(regs, labs){
 ```
 
 ```{r}
+### function to perform unweighted and inverse weighted overall global test
+overall.gt <- function(regs, labs, invweighted = FALSE){
+  n <- nrow(regs) ### compute number of observations
+  dist_mat <- as.matrix(dist(regs, diag = TRUE, upper = TRUE)) ### compute distance matrix
+  ord_mat <- knn_mat(dist_mat) ### compute ordering matrix
+  weights <- numeric(n) ### initialize weight vector
+  if (invweighted){ ### if inverse weights
+    for(i in 1:n){ ### for all 1, ..., k neighbours
+      P <- ifelse(ord_mat > (n - i), 1, 0) ### compute partition matrix
+      weights[i] <- InvPropWeight(P, labs) ### weight according to inverse of variance of partition matrix
+    }
+    weights <- round(weights/sum(weights)*100, 6)
+  }
+  X <- t(chol(XXT(ord_mat = ord_mat))) ### perform cholesky decomosition on XXT to increase computation performance
+  res <- globaltest::gt(y ~ 1, y ~ ., data = data.frame(X, y = labs))@result[1] ### perform global test on cholesky decomposition
+  if(invweighted){ ### if inverse weights
+    X_iw <- t(chol(XXT(ord_mat = ord_mat, weights = weights))) ### perform cholesky decomosition on weighted XXT to increase computation performance
+    res <- cbind(res, globaltest::gt(y ~ 1, y ~ ., data = data.frame(X_iw, y = labs))@result[1]) #### perform global test on inversely weighted partition matrices
+  }
+  return(res)
+}
+```
+
+
+```{r}
 ### function to perform global test on a partition matrix which corresponds to the (smallest) fraction of labels times the number of observations (rounded)
 prop.knn_gt <- function(regs, labs){
   prop <- mean(labs[["y"]]) ### compute fraction of labels
@@ -193,16 +242,17 @@ prop.knn_gt <- function(regs, labs){
 }
 
 ### function to perform the global test on the partition matrix of the validation set for the value of k which corresponds to the smallest p-value in the training set (splits data in two)
-pval.knn_gt <- function(regs, labs){
+pval.knn_gt <- function(regs, labs, balanced = TRUE, force = FALSE){
   i <- 1 ### arbitrarily choose a validation fold
-  folds <- create_folds(n_folds = 2, labs = labs) ### create folds such that the groups are balanced
+  folds <- create_folds(n_folds = 2, labs = labs, balanced = balanced, force = force) ### create folds such that the groups are balanced
   n_train <- sum(folds != i) ### compute the number of observations in each folds
+  neighbours <- round(seq(2, n_train, length.out = round(sqrt(n_train))))
   dist_mat <- as.matrix(dist(regs[folds != i, ], diag = TRUE, upper = TRUE)) ### compute distance matrix
   ord_mat <- knn_mat(dist_mat) ### compute ordering mat
-  p_vals <- numeric(n_train) ### initialize vector for p-values
+  p_vals <- numeric(length(neighbours)) ### initialize vector for p-values
   p_vals[1] <- 1 ### skip p-value for partition matrix which corresponds to k = 1
-  for (j in 2:n_train){ ### for all 2, ..., k neighbours
-    P <- ifelse(ord_mat > (n_train - j), 1, 0) ### compute partition matrix and save in list
+  for (j in 1:length(neighbours)){ ### for all 2, ..., k neighbours
+    P <- ifelse(ord_mat > (neighbours[j] - j), 1, 0) ### compute partition matrix and save in list
     p_vals[j] <- log(globaltest::gt(y ~ 1, y ~ ., data = cbind(P, labs[folds != i, ]))@result[1]) ### compute gt statistic based on partition matrix
     }
     optimal_k <- which.min(p_vals) ### select k which corresponds to smallest p-value
@@ -213,463 +263,163 @@ pval.knn_gt <- function(regs, labs){
     res <- gt(y ~ 1, y ~ ., data = cbind(P, labs[folds == i, ]))@result[1] ### perform global test
   return(res)
 }
-### function to perform unweighted and inverse weighted overall global test
+
 overall.gt <- function(regs, labs, invweighted = FALSE){
   n <- nrow(regs) ### compute number of observations
   dist_mat <- as.matrix(dist(regs, diag = TRUE, upper = TRUE)) ### compute distance matrix
   ord_mat <- knn_mat(dist_mat) ### compute ordering matrix
-  weights <- numeric(n)
-  if (invweighted){ ### if inverse weights
-    for(i in 1:n){ ### for all 1, ..., k neighbours
-      P <- ifelse(ord_mat > (n - i), 1, 0) ### compute partition matrix
-      weights[i] <- InvPropWeight(P, labs) ### weight according to inverse of variance of partition matrix
-      }
-  }
-  X <- t(chol(XXT(ord_mat = ord_mat))) ### perform cholesky decomosition on XXT to increase computation performance
-  res <- globaltest::gt(y ~ 1, y ~ ., data = data.frame(X, y = labs))@result[1] ### perform global test on cholesky decomposition
-  if(invweighted){ ### if inverse weights
-    X_iw <- t(chol(XXT(ord_mat = ord_mat, weights = weights))) ### perform cholesky decomosition on weighted XXT to increase computation performance
-    res <- cbind(res, globaltest::gt(y ~ 1, y ~ ., data = data.frame(X_iw, y = labs))@result[1]) #### perform global test on inversely weighted partition matrices
-  }
-  return(res)
-}
-
-```
-
-```{r}
-pckgs <- c("create_folds", "linear.gt", "nestedcv.ridge", "nestedcv.knn", "prop.knn_gt", "pval.knn_gt", "overall.gt", "rename_folds", "knn_mat", "is.int", "gt")
-SimExp <- function(n_reps, n_perms, data, pckgs){
-  labs <- data[, "y"]
-  regs <- data[, !names(data) %in% "y"]
-  indx <- create_folds(n_folds = n_reps, labs = labs, balanced = TRUE)
-  res <- matrix(data = NA, nrow = n_reps, ncol = 6)
-  names(res) <- c("linear.gt", "nestedcv.ridge", "nestedcv.knn", "prop.knn_gt", "pval.knn_gt", "overall.gt")
-  
-  for(i in 1:max(indx)){
-    print(i)
-    sub_regs <- regs[indx == i,]
-    sub_labs <- labs[indx == i,]
-    folds <- create_folds(n_folds = 5, labs = sub_labs, balanced = TRUE)
-    res[i, 1] <- linear.gt(regs = sub_regs, labs = sub_labs)
-    ridge_stat <- nestedcv.ridge(folds = folds, regs = sub_regs, labs = sub_labs)
-    knn_stat <- nestedcv.knn(neighbours = c(5, 15), folds = folds, regs = sub_regs, labs = sub_labs)
-    res[i, 4] <- prop.knn_gt(regs = sub_regs, labs = sub_labs)
-    res[i, 5] <- pval.knn_gt(regs = sub_regs, labs = sub_labs)
-    res[i, 6] <- overall.gt(regs = sub_regs, labs = sub_labs)
-    
-    perm_mat <- foreach(j = 1:n_perms, .combine = "cbind", .export = pckgs) %dopar% {
-      perm_indx <- sample(nrow(sub_labs))
-      perm_regs <- sub_regs[perm_indx, ]
-      perm_folds <- create_folds(n_folds = 5, labs = sub_labs, balanced = TRUE)
-      perm_ridge <- nestedcv.ridge(folds = perm_folds, regs = perm_regs, labs = sub_labs)
-      perm_knn <- nestedcv.knn(neighbours = c(5, 15), folds = perm_folds, regs = perm_regs, labs = sub_labs)
-      matrix(c(perm_ridge, perm_knn), nrow = 2)
+  weights <- numeric(n) ### initialize weight vector
+  P <- P_iw <- vector(mode = "list", length = n)
+  for(i in 1:n){ ### for all 1, ..., k neighbours
+    P[[i]] <- ifelse(ord_mat > (n - i), 1, 0) ### compute partition matrix
+    if(invweighted){
+      weight <- InvPropWeight(P[[i]], labs) ### weight according to inverse of variance of partition matrix
+      P_iw[[i]] <- P[[i]] * weight
     }
-    res[i, 2] <- 1- mean(ridge_stat >= perm_mat[1, ])
-    res[i, 3] <- 1- mean(knn_stat >= perm_mat[2, ])
+  }
+    #weights <- round(weights/sum(weights)*100, 6)
+  X <- do.call(cbind, P)
+  res <- globaltest::gt(y ~ 1, y ~ ., data = data.frame(crossprod(t(X)), y = labs))@result[1] ### perform global test on cholesky decomposition
+  if(invweighted){ ### if inverse weights
+    X_iw <- do.call(cbind, P_iw) ### perform cholesky decomosition on weighted XXT to increase computation performance
+    res <- cbind(res, globaltest::gt(y ~ 1, y ~ ., data = data.frame(crossprod(t(X_iw)), y = labs))@result[1]) #### perform global test on inversely weighted partition matrices
   }
   return(res)
 }
-tmp <- SimExp(n_reps = 100, n_perms = 100, data = data[["circles"]][c(1:2000, 50001:52000), ], pckgs = pckgs)
-tmp1 <- SimExp(n_reps = 100, n_perms = 100, data = data[["linear"]][c(1:2000, 50001:52000), ], pckgs = pckgs)
+
 ```
 
 ```{r}
-EmpericalPower <- function(data){
-  out <- apply(data, 2, function(x) mean(x < 0.05))
+pckgs <- as.vector(lsf.str())
+  
+SimExp <- function(data, n_reps, pckgs, indx = NA, n_perms = 100, ...){
+  labs <- data[, "y"] ### extract labels
+  regs <- data[, !names(data) %in% "y"] ### extract predictors
+  if(all(is.na(indx))){ ### if no weights specified
+    indx <- create_folds(n_folds = n_reps, labs = labs, ...) ### compute folds equal to the number of replications
+  }
+  res <- matrix(data = NA, nrow = n_reps, ncol = 7) ### initialize output matrix
+  colnames(res) <- c("linear.gt", "nestedcv.ridge", "nestedcv.knn", "prop.knn_gt", "pval.knn_gt", "overall.gt", "invoverall.gt") ### assign names to the output matrix
+  
+  for(i in 1:max(indx)){ ### for each folds
+    sub_regs <- regs[indx == i,] ### select regressor subset
+    sub_labs <- labs[indx == i,] ### select label subset
+    folds <- create_folds(n_folds = 5, labs = sub_labs, ...) ### create folds for functions that require cross validation
+    res[i, 1] <- linear.gt(regs = sub_regs, labs = sub_labs) ### compute p-value of the linear global test
+    ridge_stat <- nestedcv.ridge(folds = folds, regs = sub_regs, labs = sub_labs) ### compute test statistic for the nested ridge
+    knn_stat <- nestedcv.knn(folds = folds, regs = sub_regs, labs = sub_labs) ### compute test statistic for the nested knn
+    res[i, 4] <- prop.knn_gt(regs = sub_regs, labs = sub_labs) ### compute p-value for the global test on the partition matrix based on the label proportion
+    res[i, 5] <- pval.knn_gt(regs = sub_regs, labs = sub_labs, ...) ### compute p-value for the global test based on the value of k which has the smallest p-value in the training set
+    res[i, c(6, 7)] <- overall.gt(regs = sub_regs, labs = sub_labs, invweighted = TRUE) ### compute unweighted and inversely weighted overall gloval test
+    
+    perm_mat <- foreach(j = 1:n_perms, .combine = "cbind", .export = pckgs) %dopar% { ### for n_perms replications
+      perm_indx <- sample(nrow(sub_labs)) ### permutation index
+      perm_regs <- sub_regs[perm_indx, ] ### permute regressors
+      perm_folds <- create_folds(n_folds = 5, labs = sub_labs, ...) ### compute folds
+      perm_ridge <- nestedcv.ridge(folds = perm_folds, regs = perm_regs, labs = sub_labs) ### compute (permuted) test statistic for the nested ridge
+      perm_knn <- nestedcv.knn(folds = perm_folds, regs = perm_regs, labs = sub_labs) ### compute (permuted) test statistic for the nested knn
+      matrix(c(perm_ridge, perm_knn), nrow = 2) ### return permuted test statistics for both tests
+    }
+    res[i, 2] <- 1- mean(ridge_stat >= perm_mat[1, ]) ### compute emperical p-value for nested ridge
+    res[i, 3] <- 1- mean(knn_stat >= perm_mat[2, ]) ### compute emperical p-value for nested knn
+  }
+  return(res)
+}
+```
+
+```{r}
+ggplot(data[["circles"]][c(1:20, 50001:50020), ], aes(x = x1, y = x2, colour = y)) + geom_point()
+
+SubsampData <- function(data, n_reps, sampsize, n = 50000, ...){
+  indx <- seq(1, n)
+  sub_data <- rbind(data[sample(indx, sampsize*n_reps/2), ], data[sample(indx, sampsize*n_reps/2) + n, ]) 
+  out <- SimExp(n_reps = n_reps, data = sub_data, ...)
+  out <- EmpericalPower(out)
   return(out)
 }
-EmpericalPower(tmp)
+SubsampData(data[["circles"]], sampsize = 40, pckgs = pckgs, n_reps = 100)
 ```
 
+```{r}
+ggplot(data[["linear"]][c(1:20, 50001:50020), ], aes(x = x1, y = x2, colour = y)) + geom_point()
+
+SubsampData(data[["linear"]], sampsize = 40, pckgs = pckgs, n_reps = 100)
+```
+
+```{r}
+### function to take a sample that follows a checkerboard pattern. Here p represents the number of dimensions, n the number of observations per position on the checkerboard, n_clusts the number of clusters (use an uneven number, an even number gives a stripes pattern)
+CheckerSamp <- function(n, n_clusts, p = 2, c = 1){
+  data <- matrix(runif((n_clusts^2)*n * p), nrow = (n_clusts^2)*n, ncol = p) ### draw from uniform
+  shift <- expand.grid(seq(0, n_clusts - 1), seq(0, n_clusts - 1)) ### compute shift
+  shift <- do.call(rbind, replicate(n, shift, simplify = FALSE))*c ### replicate shift such that each cluster has n obs
+  labs <- rep(c(FALSE, TRUE), ceiling(n_clusts^2/2))[1:(n_clusts^2)] ### generate labs
+  labs <- rep(labs, n) ### replicate labs such that every obs has a label according to its cluster
+  data <- data + shift ### compute shifted regressors
+  data <- cbind(data, labs) ### combine regressors and labels into matrix
+  names(data) <- c("x1", "x2", "y") ### rename columns
+  indx <- order(data[["y"]])
+  data <- data[indx, ]
+  return(data)
+}
+ggplot(CheckerSamp(p = 2, n = 5, n_clusts = 3, c = 1), aes(x = x1, y = x2, colour = y)) + geom_point()
+```
+
+```{r}
+CheckerSim <- function(n_reps, n, n_clusts, ...){
+  ellip <- list(...)
+  sampsize <- n_clusts^2*n
+  indx <- as.vector(sapply(1:n_reps, function(x, sampsize) rep(x, sampsize), list(sampsize = sampsize)))
+  data <- lapply(1:n_reps, FUN = function(x) CheckerSamp(n = n, n_clusts = n_clusts))
+  data <- as_tibble(do.call(rbind, data))
+  out <- SimExp(n_reps = n_reps, data = data, indx = indx, ...)
+  out <- EmpericalPower(out)
+  return(out)
+}
+tmp <- CheckerSim(n_reps = 100, n = 5, n_clusts = 3, pckgs = pckgs, force = TRUE)
+```
+
+```{r}
+LDASamp <- function(n_samples, p, effect){
+  inv_vcov <- solve(diag(p)) ### inverse of the covariance matrix (mahalanobis distance) (must be identity in this case)
+  e_vec <- rep(1,p) ### e vector (mahalanobis distance)
+  c <- sqrt( effect / (n_samples * (e_vec %*% inv_vcov %*% e_vec)) ) ### compute constant as a function of the effect size (mahalanobis distance)
+  shift <- matrix(effect*c, nrow=n_samples/2, ncol=p, byrow = TRUE) ### compute the shift for one class
+  labs <- sample(rep(c(TRUE, FALSE), n_samples/2)) ### randomly sample labels (balanced)
+  noise <- matrix(rnorm(n_samples*p), ncol = p, nrow = n_samples) ### generate regressor (independent standard normal)
+  noise[labs,] <- noise[labs,] + shift ### compute shifted regressors 
+  indx <- order(labs) ### sort labels (required for power_knn func)
+  labs <- labs[indx] ### order labels
+  noise <- noise[indx, ] ### order regressor in the same sequence
+  output <- data.frame(noise, labs) ### concatenate regressors and labels into dataframe
+  names(output) <- c(paste0("x", 1:p), "y") ### change column names
+  return(output)
+}
+```
+
+```{r}
+LDASim <- function(sampsize, n_reps, effect, p, pckgs, ...){
+  if(as.numeric(length(p) > 1) + as.numeric(length(effect) > 1) + as.numeric(length(sampsize) > 1) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
+  params <- cbind(p, effect, n_samples) ### parameter space
+  output <- list(nrow(params)) ### initialize empty list for all elements of p
+  data <- as_tibble(LDASamp(n_samples = sampsize * n_reps, p = p, effect = effect))
+  out <- SimExp(n_reps = n_reps, data = data, pckgs = pckgs, ...)
+  out <- EmpericalPower(out)
+  return(out)
+}
+LDASim(sampsize = 40, n_reps = 100, effect = 25, p = 20, pckgs = pckgs)
+
+tmp <- matrix(ncol = 7, nrow = 5)
+ps <- c(2, 20, 40, 60, 80, 100)
+for (i in 1:length(ps)){
+ tmp[i, ] <- LDASim(sampsize = 40, n_reps = 100, effect = 25, p = ps[i], pckgs = pckgs)
+}
+```
 
 
 ```{r}
 regs <- data[["circles"]][c(1:50, 50001:50050), c("x1", "x2")]
 labs <- data[["circles"]][c(1:50, 50001:50050), c("y")]
-folds <- create_folds(n_folds = 2, labs = labs)
-n <- nrow(regs)
-dist_mat <- as.matrix(dist(regs, diag = TRUE, upper = TRUE)) ### compute distance matrix
-ord_mat <- knn_mat(dist_mat)
-P <- P_iw <- vector(mode = "list", length = n)
-for (j in 1:n){ ### for all 1, ..., k neighbours
-    P[[j]] <- ifelse(ord_mat > (n - j), 1, 0)
-}
-P_enh <- do.call(cbind, P)
-res <- globaltest::gt(y ~ 1, y ~ ., data = data.frame(P_enh, y = labs))@result[1]
-res
-
-
-xxt <- XXT(ord_mat)
-tmp <- t(chol(xxt))
-globaltest::gt(y ~ 1, y ~ ., data = data.frame(tmp, y = labs))@result[1]
+folds <- create_folds(n_folds = 5, labs = labs)
 ```
 
-```{r}
-tmp <- matrix(rnorm(100), 10, 10)
-tmp <- data.frame(tmp, y = sample(c(0, 1), size = 10, replace = TRUE))
-# get null and alternative
-null <- .getNull(y ~ 1, tmp, 10, "linear")
-alternative <- .getAlternative(y ~ ., tmp, 10)
-
-.getAlternative <- function(alternative, data, n) {
-
-  # coerce alternative into a matrix
-  if (is.data.frame(alternative)) {
-    if (all(sapply(alternative, is.numeric))) {
-      alternative <- as.matrix(alternative)
-    } else {
-      stop("argument \"alternative\" could not be coerced into a matrix")
-    }
-  }
-  if (is.vector(alternative)) {
-    if (is.numeric(alternative)) {
-      alternative <- as.matrix(alternative)
-      colnames(alternative) <- "x"
-    } else {
-      stop("argument \"alternative\" could not be coerced into a matrix")
-    }
-  }
-  # transpose if desired
-  if (gt.options()$transpose && is.matrix(alternative))
-    alternative <- t(alternative)
-  if (is(alternative, "ExpressionSet")) {
-    alternative <- t(exprs(alternative))
-  }
-  if (is(alternative, "formula")) {
-
-    # keep NAs
-    old.na.action <- options()$na.action  
-    options(na.action="na.pass")
-
-    # make appropriate contrasts
-    mframe <- model.frame(alternative, data=data)
-    factors <- names(mframe)[sapply(mframe, is.factor)]
-    contrs <- lapply(factors, function(fac) {
-      levs <- levels(mframe[[fac]])
-      k <- length(levs)
-      if (is.ordered(mframe[[fac]])) {
-        contr <- matrix(0,k,k)
-        contr[lower.tri(contr,diag=TRUE)] <- 1
-      } else {
-        contr <- diag(k)
-      }
-      rownames(contr) <- colnames(contr) <- levs                     
-      contr 
-    })
-    names(contrs) <- factors
-                             
-    # make the design matrix
-    alternative <- terms(alternative, data=data)
-    if (length(attr(alternative, "term.labels")) == 0)
-      stop("empty alternative")
-    attr(alternative, "intercept") <- 1
-    alternative <- model.matrix(alternative, contrasts.arg=contrs, data=data)
-    alternative <- alternative[,colnames(alternative) != "(Intercept)",drop=FALSE]    # ugly, but I've found no other way
-    
-    # restore default
-    options(na.action = old.na.action)
-  }
-
-  #check dimensions and names
-  if (nrow(alternative) != n) {
-    stop("the length of \"response\" (",n, ") does not match the row count of \"alternative\" (", nrow(alternative), ")")
-  }
-  if (is.null(colnames(alternative)))
-    stop("colnames missing in alternative design matrix")
-
-  alternative
-}
-
-.getNull <- function(null, data, n, model) {
-
-  # coerce null into a matrix and find the offset term
-  offset <- NULL
-  if (is.data.frame(null) || is.vector(null)) {
-    if (all(sapply(null, is.numeric))) {
-      null <- as.matrix(null)
-    } else {
-      stop("argument \"null\" could not be coerced into a matrix")
-    }
-  }
-  if (is(null, "formula")) {
-    if (is.null(data)) {
-      tnull <- terms(null)
-      # prevent problems for input ~1 or ~0:
-      if ((attr(tnull, "response") == 0) && (length(attr(tnull, "term.labels")) == 0)
-          && (length(attr(tnull, "offset")) == 0)) {
-        if (attr(tnull, "intercept") == 1)
-          tnull <- terms(numeric(n) ~ 1)
-        else
-          tnull <- terms(numeric(n) ~ 0)
-      }
-      offset <- model.offset(model.frame(tnull))
-    } else {
-      offset <- model.offset(model.frame(null, data=data))
-      tnull <- terms(null, data=data)
-    }
-    data <- model.frame(tnull, data, drop.unused.levels = TRUE)
-    null <- model.matrix(tnull, data)
- 
-    # suppress intercept if necessary (can this be done more elegantly?)
-    if (model == "cox") null <- null[,colnames(null) != "(Intercept)",drop=FALSE]
-  }
-
-  # check dimensions
-  if (nrow(null) != n) {
-    stop("the length of \"response\" (",n, ") does not match the row count of \"null\" (", nrow(null), ")")
-  }
-
-  list(null = null, offset = offset)
-}
-```
-
-```{r}
-Z <- null
-X <- alternative
-Y <- response
-m <- ncol(Z)
-n <- nrow(Z)
-form <- formula(.makeFormula(m>0, !is.null(NULL)))
-Y <- residuals(lm(form))
-sumYY <- sum(Y*Y)
-X <- X - Z %*% solve(crossprod(Z), crossprod(Z, X))
-# set columns numerically zero to exactly zero
-csm <- colSums(X*X)
-X[,csm < max(csm)*1e-14] <- 0
-norm.const <- sum(X * X) / 100
-xy <- crossprod(X, Y)
-S <- sum(xy * xy) / sumYY
-if (sumYY == 0) S <- 0
-lams <- eigen(crossprod(X), symmetric = TRUE, only.values=TRUE)$values
-if (length(lams) < n) lams <- c(lams, numeric(n-length(lams)))
-lams[1:(n-m)] <- lams[1:(n-m)] - S
-# term needed for mean and variance of S for z-score
-tr.term <- crossprod(X)
-var.num <- 2*sum(tr.term*tr.term)
-# mean and variance of S for z-score
-# use series approximation as given in Paolella (2003) 319:
-mu.num <- sum(lams) + (n-m)*S
-mu.den <- n-m
-var.den <- 2*(n-m)
-cov.term <- 2*mu.num
-ES <- (mu.num/mu.den) * (1 - cov.term/(mu.num*mu.den) + var.den/(mu.den^2))
-VarS <- (mu.num^2/mu.den^2) * (var.num/(mu.num^2)  + var.den/(mu.den^2) - 2*cov.term/(mu.num*mu.den))
-c(S = S/norm.const, ES = ES/norm.const, sdS = sqrt(VarS)/norm.const)
-
-.makeFormula <- function(has.null, has.offset) {
-  form <- "response ~ 0"
-  if (has.null) form <- paste(form, "+Z")
-  if (has.offset) form <- paste(form, "+offset(offset)")
-  form
-}
-```
-
-```{r}
-gt1 <- function(response, alternative, null, data, test.value,    
-            model = c("linear", "logistic", "cox", "poisson", "multinomial"), levels,
-            directional = FALSE, standardize = FALSE, permutations = 0, 
-            subsets, weights, alias, x = FALSE, trace) {
-  
-  # store the call
-  call <- match.call()
-  
-  # avoid conflict between "levels" input and "levels" function
-  if (missing(levels)) levels <- NULL
-                       
-  # data default
-  if (missing(data)) {
-    if ((!missing(alternative)) && (is(alternative, "ExpressionSet"))) {
-      data <- pData(alternative)
-    } else
-      data <- NULL
-  }
-  if (is.matrix(data))  
-    data <- data.frame(data)
-
-  # evaluate response, which may be one of the colnames of data
-  response <- eval(call$response, data, parent.frame())
-
-  # settle null, alternative and response if response is a formula
-  if (missing(null) || is.null(null)) {
-    if ((!missing(alternative)) && is(response, "formula"))
-      null <- response
-    else
-      null <- ~1
-  } 
-  if (missing(alternative))
-    if (is(response, "formula"))
-      alternative <- response
-    else
-      stop("argument \"alternative\" is missing, with no default")  
-  if (is(response, "formula")) {
-    name.response <-  deparse(eval(response)[[2]])
-    response <- eval(attr(terms(response, data=data), "variables"), data, environment(response))[[attr(terms(response, data=data), "response")]]
-  } else {
-    name.response <- deparse(call$response)
-  }
-  
-  # remove redundant levels from factor response
-  # and coerce response to factor in case of levels input
-  if (is.factor(response) || !is.null(levels))
-    response <- factor(response) 
-                                     
-  # get the model
-  if (missing(model)) {
-    if(is(response, "Surv")) 
-      model <- "cox"
-    else if ((is.factor(response) && length(levels(response)) <= 2) || is.logical(response)) 
-      model <- "logistic"
-    else if (is.factor(response) && length(levels(response)) > 2)
-      model <- "multinomial"
-  }
-  model <- match.arg(tolower(model), c("linear", "logistic", "cox", "poisson", "multinomial"))
-
-  # if multinomial, coerce to factor and remove redundant level
-  if (model=="multinomial" && !is.factor(response))
-      response <- factor(response)
-  
-  # if multinomial, coerce to logistic if possible
-  if (model=="multinomial" && nlevels(response)==2)
-    model <- "logistic"
-  
-  # find the sample size
-  if (model == "cox") {
-    if (attr(response, "type") %in% c("right", "counting"))
-      n <- nrow(response)
-    else
-      stop("survival data of type", attr(response, "type"), "not supported")
-  } else {
-    n <- length(response)
-  }
-                
-
-
-  
-  # remove terms from alternative that are also in null
-  if (is(null, "formula") && is(alternative, "formula") && 
-      identical(environment(null), environment(alternative))) {
-    dup <- attr(terms(alternative, data=data), "term.labels") %in% attr(terms(null, data=data), "term.labels")
-    if (all(dup)) stop("all covariates in alternative also in null")  
-    if (any(dup)) 
-      alternative <- formula(terms(alternative,data=data)[!dup])
-  }
-  
-  
-  # print a warning, when strata appear in alternative that do not appear in null, remove them from alternative
-  if (is(alternative, "formula")) {
-    if (length(attr(terms(alternative, specials = "strata", data=data), "specials")$strata) > 0) {
-      altterms <- terms(alternative, specials = "strata", data=data)
-      strata <- untangle.specials(altterms, "strata", 1)
-      strata.nrs <- strata$terms
-      alternative <- formula(altterms[-strata.nrs])
-      warning("there are strata in alternative, which do no appear in null. strata only appearing in alternative are ignored")
-      if (length(attr(terms(alternative, data=data), "term.labels")) == 0)
-        stop("all covariates in alternative also in null")
-    }
-  }
-  
-  
-  # extract strata out of null  
-  if (is(null, "formula")) {
-    nullterms <- terms(null, specials = "strata", data=data)
-    if (length(attr(nullterms, "specials")$strata) > 0) {
-      if (model == "cox") {
-        strata <- untangle.specials(nullterms, "strata", 1)
-        strata.nrs <- strata$terms
-        strata.nrs2 <- attr(nullterms, "specials")$strata
-        if (missing(data)) 
-          strata <- strata(eval(attr(nullterms, "variables"), 
-                                environment(nullterms))[strata.nrs2], shortlabel = TRUE)
-        else
-          strata <- strata(eval(attr(nullterms, 
-                                        "variables"), data, environment(nullterms))[strata.nrs2], 
-                              shortlabel = TRUE)
-        null <- formula(nullterms[-strata.nrs])
-      } 
-      else 
-        stop("strata only implemented for Cox model")
-    }
-    else 
-      strata <- NULL
-  }
-  
-
-  # get null and alternative
-  null <- .getNull(null, data, n, model)
-  alternative <- .getAlternative(alternative, data, n)
-
-  # Adjust input due to levels argument
-  if ((!is.null(levels)) && is.factor(response)) {
-    if (!all(levels %in% levels(response)))
-      stop("argument \"levels\" does not match levels(response)")
-    if (length(levels) > 1) {
-      select <- response %in% levels
-      response <- factor(response[select], levels=levels)
-      alternative <- alternative[select,,drop=FALSE]
-      null$null <- null$null[select,, drop=FALSE]
-      if (!is.null(null$offset)) 
-        null$offset <- null$offset[select]
-      if (length(levels) == 2)
-        model <- "logistic"
-    } else {
-      response <- factor(response == levels)
-      levels(response) <- c("other", levels)
-      model <- "logistic"
-    }
-  }
-
-  # prepare legends for plots later
-  legend <- list()
-  if (model == "logistic") {
-    if (is.factor(response)) {
-      legend$cov <- paste("assoc. with", name.response, "=", rev(levels(response)))
-      legend$subj <- paste(name.response, "=", rev(levels(response)))
-    } else {
-      legend$cov <- paste("assoc. with", name.response, "=", 1:0)
-      legend$subj <- paste(name.response, "=", 1:0)
-    }
-  } else if (model == "multinomial") {
-    legend$cov <- paste("assoc. with", name.response, "=", levels(response))
-    legend$subj <- paste(name.response, "=", levels(response))
-  } else if (model %in% c("linear", "poisson")) {
-    legend$cov <- paste(c("pos. assoc. with", "neg. assoc. with"), name.response)
-    legend$subj <- paste(c("pos. residual", "neg. residual"), name.response)
-  } else { # model = "survival" 
-    legend$cov <- c("pos. assoc. with survival", "neg. assoc. with survival")
-    legend$subj <- c("late event or censored", "early event")
-  }
-
-  #subsets and weigths
-  if (!missing(subsets) && !is.list(subsets))
-    subsets <- list(subsets)
-  many.subsets <- !missing(subsets)
-  one.weight <- (!missing(weights)) && (!is.list(weights)) && (length(weights)==ncol(alternative)) && many.subsets
-  many.weights <- (!missing(weights)) && (!one.weight)
-  if (many.weights && !is.list(weights))
-    weights <- list(weights)
-
-  # if a test.value was specified, adjust the offset term
-  # NOTE: test.value is interpreted relative to alternative BEFORE standardizaton and weighting
-  if (!missing(test.value)) {
-    if (length(test.value) == ncol(alternative))
-      test.offset <- drop(alternative %*% test.value)
-    else if ((length(subsets)==1) && (length(test.value) == length(subsets[[1]])))
-      test.offset <- drop(alternative[,subsets[[1]], drop=FALSE] %*% test.value)
-    else
-      stop("the length of \"test.value\" (",length(test.value), ") does not match the the number of covariates in \"alternative\" (", ncol(alternative), ")")
-    if (!is.null(null$offset))
-      offset <- null$offset + test.offset
-    else      
-      offset <- test.offset
-  } else
-    offset <- null$offset   
-  null <- null$null
-  if (model == "multinomial" && !is.null(offset))
-    stop("offset term and test.value not yet implemented for the multinomial model")
-  return(alternative)
-}
-
-alternative <- gt1(y ~ 1, y ~. , data =tmp)
-```
 
