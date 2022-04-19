@@ -104,6 +104,7 @@ InvPropWeight <- function(P, y){
   var.den <- 2*(n-m)
   cov.term <- 2*mu.num
   VarS <- (mu.num^2/mu.den^2) * (var.num/(mu.num^2)  + var.den/(mu.den^2) - 2*cov.term/(mu.num*mu.den))
+  return(c(mu.num, mu.den, var.den, var.num, cov.term, VarS))
   weight <- 1/VarS
   if (is.nan(weight) | weight > 10^6) weight <- 0
   return(weight)
@@ -399,20 +400,17 @@ LDASamp <- function(n_samples, p, effect){
 ```{r}
 LDASim <- function(sampsize, n_reps, effect, p, pckgs, ...){
   if(as.numeric(length(p) > 1) + as.numeric(length(effect) > 1) + as.numeric(length(sampsize) > 1) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
-  params <- cbind(p, effect, n_samples) ### parameter space
-  output <- list(nrow(params)) ### initialize empty list for all elements of p
-  data <- as_tibble(LDASamp(n_samples = sampsize * n_reps, p = p, effect = effect))
-  out <- SimExp(n_reps = n_reps, data = data, pckgs = pckgs, ...)
-  out <- EmpericalPower(out)
+  params <- cbind(p, effect, sampsize) ### parameter space
+  out <- matrix(ncol = 7, nrow = nrow(params))
+  for (i in 1:nrow(params)){
+    print(i)
+    data <- as_tibble(LDASamp(n_samples = params[i, "sampsize"] * n_reps, p = params[i, "p"], effect = params[i, "effect"]))
+    tmp <- SimExp(n_reps = n_reps, data = data, pckgs = pckgs, ...)
+    out[i, ] <- EmpericalPower(tmp)
+  }
   return(out)
 }
-LDASim(sampsize = 40, n_reps = 100, effect = 25, p = 20, pckgs = pckgs)
-
-tmp <- matrix(ncol = 7, nrow = 5)
-ps <- c(2, 20, 40, 60, 80, 100)
-for (i in 1:length(ps)){
- tmp[i, ] <- LDASim(sampsize = 40, n_reps = 100, effect = 25, p = ps[i], pckgs = pckgs)
-}
+tmp <- LDASim(sampsize = 40, n_reps = 100, effect = 25, p = c(2, 15, 25, 50, 100), pckgs = pckgs)
 ```
 
 
