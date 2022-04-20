@@ -24,6 +24,7 @@ library(glmnet)
 library(dplyr)
 library(MASS)
 library(gridExtra)
+library(tidyr)
 set.seed(1979418)
 
 ### function to read excel files in the current directory in the format "sim_X.xlsx"
@@ -221,12 +222,10 @@ overall.gt <- function(regs, labs, invweighted = FALSE){
   res <- globaltest::gt(y ~ 1, y ~ ., data = data.frame(X, y = labs))@result[1] ### perform global test on cholesky decomposition
   if(invweighted){ ### if inverse weights
     X_iw <- t(chol(XXT(ord_mat = ord_mat, weights = weights))) ### perform cholesky decomosition on weighted XXT to increase computation performance
-    return(XXT(ord_mat = ord_mat, weights = weights))
     res <- cbind(res, globaltest::gt(y ~ 1, y ~ ., data = data.frame(X_iw, y = labs))@result[1]) #### perform global test on inversely weighted partition matrices
   }
   return(res)
 }
-tmp10 <- overall.gt(regs = tmp1[[1]], labs = tmp1[[2]], invweighted = TRUE)
 ```
 
 
@@ -278,15 +277,13 @@ overall.gt <- function(regs, labs, invweighted = FALSE){
     }
   }
   X <- do.call(cbind, P)
-  res <- globaltest::gt(y ~ 1, y ~ ., data = data.frame(crossprod(t(X)), y = labs))@result[1] ### perform global test on cholesky decomposition
+  res <- globaltest::gt(y ~ 1, y ~ ., data = data.frame(X, y = labs))@result[1] ### perform global test on cholesky decomposition
   if(invweighted){ ### if inverse weights
     X_iw <- do.call(cbind, P_iw) ### perform cholesky decomosition on weighted XXT to increase computation performance
-    res <- cbind(res, globaltest::gt(y ~ 1, y ~ ., data = data.frame(crossprod(t(X_iw)), y = labs))@result[1]) #### perform global test on inversely weighted partition matrices
-    return(crossprod(t(X_iw)))
+    res <- cbind(res, globaltest::gt(y ~ 1, y ~ ., data = data.frame(X_iw, y = labs))@result[1]) #### perform global test on inversely weighted partition matrices
   }
   return(res)
 }
-tmp11 <- overall.gt(regs = tmp1[[1]], labs = tmp1[[2]], invweighted = TRUE)
 ```
 
 ```{r}
@@ -325,6 +322,7 @@ SimExp <- function(data, n_reps, pckgs, indx = NA, n_perms = 100, ...){
   }
   return(res)
 }
+tmp1 <- SimExp(tmp[[1]], 3, pckgs, tmp[[2]])
 ```
 
 ```{r}
@@ -384,27 +382,12 @@ CheckerSim <- function(n_reps, n, n_clusts, ...){
   out <- data.frame(out, params[, var_name])
   colnames(out)[ncol(out)] <- var_name
   out <- pivot_longer(out, !last_col(), names_to = "method", values_to = "RF")
-  out <- ggplot(data = out, aes(x = p, y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point()
+  out <- ggplot(data = out, aes(x = .data[[var_name]], y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point()
   return(out)
 }
-tmp <- CheckerSim(n_reps = 10, n = c(3), n_clusts = 3, pckgs = pckgs, force = TRUE)
+CheckerSim(n_reps = 100, n = 3, n_clusts = c(3, 5, 9, 19), pckgs = pckgs, force = TRUE)
 ```
 
-
-```{r}
-CheckerSim <- function(n_reps, n, n_clusts, ...){
-  ellip <- list(...)
-  sampsize <- n_clusts^2*n
-  indx <- as.vector(sapply(1:n_reps, function(x, sampsize) rep(x, sampsize), list(sampsize = sampsize)))
-  data <- lapply(1:n_reps, FUN = function(x) CheckerSamp(n = n, n_clusts = n_clusts))
-  data <- as_tibble(do.call(rbind, data))
-  return(list(data, indx))
-  out <- SimExp(n_reps = n_reps, data = data, indx = indx, ...)
-  out <- EmpericalPower(out)
-  return(out)
-}
-tmp <- CheckerSim(n_reps = 3, n = 5, n_clusts = 3, pckgs = pckgs, force = TRUE)
-```
 
 ```{r}
 LDASamp <- function(n_samples, p, effect){
@@ -441,7 +424,7 @@ LDASim <- function(sampsize, n_reps, effect, p, pckgs, ...){
   out <- data.frame(out, params[, var_name])
   colnames(out)[ncol(out)] <- var_name
   out <- pivot_longer(out, !last_col(), names_to = "method", values_to = "RF")
-  out <- ggplot(data = out, aes(x = p, y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point()
+  out <- ggplot(data = out, aes(x = .data[[var_name]], y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point()
   return(out)
 }
 tmp <- LDASim(sampsize = 40, n_reps = 100, effect = 25, p = c(2, 10, 25, 50, 100), pckgs = pckgs)
