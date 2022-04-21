@@ -316,13 +316,13 @@ SubsampData <- function(data, n_reps, sampsize, n = 50000, ...){
   out <- EmpericalPower(out)
   return(out)
 }
-SubsampData(data[["circles"]], sampsize = 40, pckgs = pckgs, n_reps = 100)
+CS_samp40 <-SubsampData(data[["circles"]], sampsize = 40, pckgs = pckgs, n_reps = 100)
 ```
 
 ```{r}
 ggplot(data[["linear"]][c(1:20, 50001:50020), ], aes(x = x1, y = x2, colour = y)) + geom_point()
 
-SubsampData(data[["linear"]], sampsize = 40, pckgs = pckgs, n_reps = 100)
+LS_samp40 <- SubsampData(data[["linear"]], sampsize = 40, pckgs = pckgs, n_reps = 100)
 ```
 
 ```{r}
@@ -372,7 +372,7 @@ CheckerSim <- function(n_reps, n, n_clusts, ...){
 
 
 ```{r}
-CheckerSim(n_reps = 100, n = 3, n_clusts = c(3, 5), pckgs = pckgs, force = TRUE)
+CS_nclusts <- CheckerSim(n_reps = 100, n = 3, n_clusts = c(3, 5), pckgs = pckgs, force = TRUE)
 ```
 
 ```{r}
@@ -419,7 +419,14 @@ LDASim <- function(sampsize, n_reps, effect, p, pckgs, ...){
   }
   return(out)
 }
-LDASim(sampsize = 40, n_reps = 100, effect = 25, p = c(2, 10, 25, 50, 100), pckgs = pckgs)
+```
+
+```{r}
+LDAS_p <- LDASim(sampsize = 40, n_reps = 100, effect = 25, p = c(2, 10, 25, 50, 100), pckgs = pckgs)
+```
+
+```{r}
+LDAS_effect <- LDASim(sampsize = 40, n_reps = 100, effect = c(25, 20, 10, 1, 0.05), p = 2, pckgs = pckgs)
 ```
 
 
