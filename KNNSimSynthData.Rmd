@@ -131,24 +131,6 @@ XXT <- function(ord_mat, weights = NA){
   return(out)
 }
 
-### function to compute p-values based on the partition matrix (for 1, ..., k neighbours and the overall test) for reps replications
-power_knn <- function(data, reps){
-  p_vals <- matrix(data = NA, nrow = reps, ncol = n) ### initialize empty matrix for p-values from global test 
-  
-  for (i in 1:reps){ ### for all replications
-    X <- vector(mode = "list", length = n) ### initialize empty list of length n to accomodate all k partition matrices
-    sub_data <- data[folds == i, ] ### select data in fold i
-    sub_X <- as.matrix(sub_data[, !names(sub_data) %in% "y"])
-    dist_mat <- as.matrix(dist(sub_X, diag = TRUE, upper = TRUE)) ### compute distance matrix
-    ord_mat <- knn_mat(dist_mat) ### compute ordering mat
-    for (j in 1:n){ ### for all 1, ..., k neighbours
-      X[[j]] <- ifelse(ord_mat > (n - j), 1, 0) ### compute partition matrix and save in list
-      p_vals[i, j] <- gt(y ~ 1, y ~ ., data = data.frame(X[[j]], y = sub_data["y"]))@result[1] ### compute gt statistic based on partition matrix
-    }
-  }
-  return(p_vals) ### return a matrix with p-values with reps rows and n + 1 columns, where the last column contain p-values from the overall gt
-}
-
 is.int <- function(x) x%%1 == 0
 
 EmpericalPower <- function(data){
@@ -165,7 +147,7 @@ nestedcv.knn <- function(folds, regs, labs){
   n_folds <- max(folds) ### total number of folds
   res_outer <- numeric(n_folds) ### initialize outerloop output
   fold_id <- seq(1, n_folds) ### create fold numbers for innerloop
-  n_trin <- ((n_folds - 2)/n_folds)*nrow(regs)
+  n_trin <- (n_folds - 2)*min(table(folds))[[1]]
   neighbours <- round(seq(1, n_trin, length.out = round(sqrt(n_trin))))
   for(i in 1:n_folds){  ### for all folds
     res_inner <- matrix(NA, nrow = n_folds - 1, ncol = length(neighbours)) ### initialize innerloop output matrix
@@ -177,7 +159,8 @@ nestedcv.knn <- function(folds, regs, labs){
       }
     }
     res_inner <- apply(res_inner, MARGIN = 2, mean) ### compute average misclassification rate over the innerloop folds
-    preds <- class::knn(regs[folds != i,], regs[folds == i,], labs[folds != i, , drop = TRUE], k = neighbours[which.min(res_inner)]) ### train on n_folds - 1 for the k with the smallest misclassification rate
+    optimal_k <- neighbours[which.min(res_inner)]
+    preds <- class::knn(regs[folds != i,], regs[folds == i,], labs[folds != i, , drop = TRUE], k = optimal_k) ### train on n_folds - 1 for the k with the smallest misclassification rate
     res_outer[i] <- mean(preds == labs[folds == i, , drop = TRUE])  ### compute average accuracy on outer validation set
   }
   return(mean(res_outer))
@@ -250,9 +233,8 @@ pval.knn_gt <- function(regs, labs, balanced = TRUE, force = FALSE){
   dist_mat <- as.matrix(dist(regs[folds != i, ], diag = TRUE, upper = TRUE)) ### compute distance matrix
   ord_mat <- knn_mat(dist_mat) ### compute ordering mat
   p_vals <- numeric(length(neighbours)) ### initialize vector for p-values
-  p_vals[1] <- 1 ### skip p-value for partition matrix which corresponds to k = 1
   for (j in 1:length(neighbours)){ ### for all 2, ..., k neighbours
-    P <- ifelse(ord_mat > (neighbours[j] - j), 1, 0) ### compute partition matrix and save in list
+    P <- ifelse(ord_mat > (n_train - neighbours[j]), 1, 0) ### compute partition matrix and save in list
     p_vals[j] <- log(globaltest::gt(y ~ 1, y ~ ., data = cbind(P, labs[folds != i, ]))@result[1]) ### compute gt statistic based on partition matrix
     }
     optimal_k <- which.min(p_vals) ### select k which corresponds to smallest p-value
@@ -322,7 +304,6 @@ SimExp <- function(data, n_reps, pckgs, indx = NA, n_perms = 100, ...){
   }
   return(res)
 }
-tmp1 <- SimExp(tmp[[1]], 3, pckgs, tmp[[2]])
 ```
 
 ```{r}
@@ -364,9 +345,9 @@ ggplot(CheckerSamp(p = 2, n = 5, n_clusts = 3, c = 1), aes(x = x1, y = x2, colou
 
 ```{r}
 CheckerSim <- function(n_reps, n, n_clusts, ...){
-  indx <- c(length(n) > 1, length(n_clusts) > 1)
-  if(sum(as.numeric(indx)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
-  var_name <- c("n", "n_clusts")[indx]
+  indx_args <- c(length(n) > 1, length(n_clusts) > 1)
+  if(sum(as.numeric(indx_args)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
+  var_name <- c("n", "n_clusts")[indx_args]
   params <- cbind(n, n_clusts) ### parameter space
   out <- vector(mode = "list", length = nrow(params))
   for (i in 1:nrow(params)){
@@ -379,13 +360,23 @@ CheckerSim <- function(n_reps, n, n_clusts, ...){
     out[[i]] <- EmpericalPower(tmp)
   }
   out <- do.call(rbind, out)
-  out <- data.frame(out, params[, var_name])
-  colnames(out)[ncol(out)] <- var_name
-  out <- pivot_longer(out, !last_col(), names_to = "method", values_to = "RF")
-  out <- ggplot(data = out, aes(x = .data[[var_name]], y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point()
+  if(sum(as.numeric(indx_args)) > 0){
+    out <- data.frame(out, params[, var_name])
+    colnames(out)[ncol(out)] <- var_name
+    out <- pivot_longer(out, !last_col(), names_to = "method", values_to = "RF")
+    out <- ggplot(data = out, aes(x = .data[[var_name]], y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point()
+  }
   return(out)
 }
-CheckerSim(n_reps = 100, n = 3, n_clusts = c(3, 5, 9, 19), pckgs = pckgs, force = TRUE)
+```
+
+
+```{r}
+CheckerSim(n_reps = 100, n = 3, n_clusts = c(3, 5), pckgs = pckgs, force = TRUE)
+```
+
+```{r}
+CheckerSim(n_reps = 100, n = c(2, 5, 10), n_clusts = 3, pckgs = pckgs, force = TRUE)
 ```
 
 
@@ -409,25 +400,26 @@ LDASamp <- function(n_samples, p, effect){
 
 ```{r}
 LDASim <- function(sampsize, n_reps, effect, p, pckgs, ...){
-  indx <- c(length(p) > 1, length(effect) > 1, length(sampsize) > 1)
-  if(sum(as.numeric(indx)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
-  var_name <- c("p", "effect", "sampsize")[indx]
+  indx_args <- c(length(p) > 1, length(effect) > 1, length(sampsize) > 1)
+  if(sum(as.numeric(indx_args)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
+  var_name <- c("p", "effect", "sampsize")[indx_args]
   params <- cbind(p, effect, sampsize) ### parameter space
   out <- vector(mode = "list", length = nrow(params))
   for (i in 1:nrow(params)){
-    print(i)
     data <- as_tibble(LDASamp(n_samples = params[i, "sampsize"] * n_reps, p = params[i, "p"], effect = params[i, "effect"]))
     tmp <- SimExp(n_reps = n_reps, data = data, pckgs = pckgs, ...)
     out[[i]] <- EmpericalPower(tmp)
   }
   out <- do.call(rbind, out)
-  out <- data.frame(out, params[, var_name])
-  colnames(out)[ncol(out)] <- var_name
-  out <- pivot_longer(out, !last_col(), names_to = "method", values_to = "RF")
-  out <- ggplot(data = out, aes(x = .data[[var_name]], y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point()
+  if(sum(as.numeric(indx_args)) > 0){
+    out <- data.frame(out, params[, var_name])
+    colnames(out)[ncol(out)] <- var_name
+    out <- pivot_longer(out, !last_col(), names_to = "method", values_to = "RF")
+    out <- ggplot(data = out, aes(x = .data[[var_name]], y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point()
+  }
   return(out)
 }
-tmp <- LDASim(sampsize = 40, n_reps = 100, effect = 25, p = c(2, 10, 25, 50, 100), pckgs = pckgs)
+LDASim(sampsize = 40, n_reps = 100, effect = 25, p = c(2, 10, 25, 50, 100), pckgs = pckgs)
 ```
 
 
