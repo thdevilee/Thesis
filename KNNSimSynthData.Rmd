@@ -268,6 +268,7 @@ overall.gt <- function(regs, labs, invweighted = FALSE){
 }
 ```
 
+
 ```{r}
 pckgs <- as.vector(lsf.str())
   
@@ -287,7 +288,7 @@ SimExp <- function(data, n_reps, pckgs, indx = NA, n_perms = 100, ...){
     res[i, 1] <- linear.gt(regs = sub_regs, labs = sub_labs) ### compute p-value of the linear global test
     ridge_stat <- nestedcv.ridge(folds = folds, regs = sub_regs, labs = sub_labs) ### compute test statistic for the nested ridge
     knn_stat <- nestedcv.knn(folds = folds, regs = sub_regs, labs = sub_labs) ### compute test statistic for the nested knn
-    res[i, 4] <- prop.knn_gt(regs = sub_regs, labs = sub_labs) ### compute p-value for the global test on the partition matrix based on the label proportion
+    res[i, 4] <- prop.knn_gt(regs = sub_regs, labs = sub_labs) ### compute p-value for the global test on the parti tion matrix based on the label proportion
     res[i, 5] <- pval.knn_gt(regs = sub_regs, labs = sub_labs, ...) ### compute p-value for the global test based on the value of k which has the smallest p-value in the training set
     res[i, c(6, 7)] <- overall.gt(regs = sub_regs, labs = sub_labs, invweighted = TRUE) ### compute unweighted and inversely weighted overall gloval test
     
@@ -436,4 +437,38 @@ labs <- data[["circles"]][c(1:50, 50001:50050), c("y")]
 folds <- create_folds(n_folds = 5, labs = labs)
 ```
 
+
+```{r}
+overall.gt <- function(regs, labs, invweighted = FALSE){
+  n <- nrow(regs) ### compute number of observations
+  dist_mat <- as.matrix(dist(regs, diag = TRUE, upper = TRUE)) ### compute distance matrix
+  ord_mat <- knn_mat(dist_mat) ### compute ordering matrix
+  P <- 
+  weights <- numeric(n)
+  for(i in 1:n){ ### for all 1, ..., k neighbours
+    P[[i]] <- ifelse(ord_mat > (n - i), 1, 0) ### compute partition matrix
+    if(invweighted){
+      weights[i] <- InvPropWeight(P[[i]], labs) ### weight according to inverse of variance of partition matrix
+      P_iw[[i]] <- P[[i]] * weights[i]
+    }
+  }
+  return(weights)
+}
+
+WeightSim <- function(data, n_reps, pckgs, indx = NA, n_perms = 100, ...){
+  labs <- data[, "y"] ### extract labels
+  regs <- data[, !names(data) %in% "y"] ### extract predictors
+  if(all(is.na(indx))){ ### if no weights specified
+    indx <- create_folds(n_folds = n_reps, labs = labs, ...) ### compute folds equal to the number of replications
+  }
+  res <- matrix(data = NA, nrow = n_reps, ncol = 7) ### initialize output matrix
+  colnames(res) <- c("linear.gt", "nestedcv.ridge", "nestedcv.knn", "prop.knn_gt", "pval.knn_gt", "overall.gt", "invoverall.gt") ### assign names to the output matrix
+  
+  for(i in 1:max(indx)){ ### for each folds
+    sub_regs <- regs[indx == i,] ### select regressor subset
+    sub_labs <- labs[indx == i,] ### select label subset
+  }
+}
+
+```
 
