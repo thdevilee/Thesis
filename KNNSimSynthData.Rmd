@@ -288,7 +288,7 @@ SimExp <- function(data, n_reps, pckgs, indx = NA, n_perms = 100, ...){
     res[i, 1] <- linear.gt(regs = sub_regs, labs = sub_labs) ### compute p-value of the linear global test
     ridge_stat <- nestedcv.ridge(folds = folds, regs = sub_regs, labs = sub_labs) ### compute test statistic for the nested ridge
     knn_stat <- nestedcv.knn(folds = folds, regs = sub_regs, labs = sub_labs) ### compute test statistic for the nested knn
-    res[i, 4] <- prop.knn_gt(regs = sub_regs, labs = sub_labs) ### compute p-value for the global test on the parti tion matrix based on the label proportion
+    res[i, 4] <- prop.knn_gt(regs = sub_regs, labs = sub_labs) ### compute p-value for the global test on the partition matrix based on the label proportion
     res[i, 5] <- pval.knn_gt(regs = sub_regs, labs = sub_labs, ...) ### compute p-value for the global test based on the value of k which has the smallest p-value in the training set
     res[i, c(6, 7)] <- overall.gt(regs = sub_regs, labs = sub_labs, invweighted = TRUE) ### compute unweighted and inversely weighted overall gloval test
     
@@ -310,20 +310,20 @@ SimExp <- function(data, n_reps, pckgs, indx = NA, n_perms = 100, ...){
 ```{r}
 ggplot(data[["circles"]][c(1:20, 50001:50020), ], aes(x = x1, y = x2, colour = y)) + geom_point()
 
-SubsampData <- function(data, n_reps, sampsize, n = 50000, ...){
+ExtDataSim <- function(data, n_reps, sampsize, n = 50000, ...){
   indx <- seq(1, n)
   sub_data <- rbind(data[sample(indx, sampsize*n_reps/2), ], data[sample(indx, sampsize*n_reps/2) + n, ]) 
   out <- SimExp(n_reps = n_reps, data = sub_data, ...)
   out <- EmpericalPower(out)
   return(out)
 }
-CS_samp40 <-SubsampData(data[["circles"]], sampsize = 40, pckgs = pckgs, n_reps = 100)
+CS_samp40 <- ExtDataSim(data[["circles"]], sampsize = 40, pckgs = pckgs, n_reps = 100)
 ```
 
 ```{r}
 ggplot(data[["linear"]][c(1:20, 50001:50020), ], aes(x = x1, y = x2, colour = y)) + geom_point()
 
-LS_samp40 <- SubsampData(data[["linear"]], sampsize = 40, pckgs = pckgs, n_reps = 100)
+LS_samp40 <- ExtDataSim(data[["linear"]], sampsize = 40, pckgs = pckgs, n_reps = 100)
 ```
 
 ```{r}
@@ -439,36 +439,44 @@ folds <- create_folds(n_folds = 5, labs = labs)
 
 
 ```{r}
-overall.gt <- function(regs, labs, invweighted = FALSE){
+weights_gt <- function(regs, labs){
   n <- nrow(regs) ### compute number of observations
   dist_mat <- as.matrix(dist(regs, diag = TRUE, upper = TRUE)) ### compute distance matrix
   ord_mat <- knn_mat(dist_mat) ### compute ordering matrix
-  P <- 
+  P <- vector(mode = "list", length = n)
   weights <- numeric(n)
   for(i in 1:n){ ### for all 1, ..., k neighbours
     P[[i]] <- ifelse(ord_mat > (n - i), 1, 0) ### compute partition matrix
-    if(invweighted){
-      weights[i] <- InvPropWeight(P[[i]], labs) ### weight according to inverse of variance of partition matrix
-      P_iw[[i]] <- P[[i]] * weights[i]
-    }
+    weights[i] <- InvPropWeight(P[[i]], labs) ### weight according to inverse of variance of partition matrix
   }
   return(weights)
 }
 
-WeightSim <- function(data, n_reps, pckgs, indx = NA, n_perms = 100, ...){
+WeightSimExp <- function(data, n_reps, pckgs, indx = NA, n_perms = 100, ...){
   labs <- data[, "y"] ### extract labels
   regs <- data[, !names(data) %in% "y"] ### extract predictors
   if(all(is.na(indx))){ ### if no weights specified
     indx <- create_folds(n_folds = n_reps, labs = labs, ...) ### compute folds equal to the number of replications
   }
-  res <- matrix(data = NA, nrow = n_reps, ncol = 7) ### initialize output matrix
-  colnames(res) <- c("linear.gt", "nestedcv.ridge", "nestedcv.knn", "prop.knn_gt", "pval.knn_gt", "overall.gt", "invoverall.gt") ### assign names to the output matrix
+  res <- matrix(data = NA, nrow = max(indx), ncol = max(table(indx))) ### initialize output matrix
   
   for(i in 1:max(indx)){ ### for each folds
     sub_regs <- regs[indx == i,] ### select regressor subset
     sub_labs <- labs[indx == i,] ### select label subset
+    res[i, ] <- weights_gt(regs = sub_regs, labs = sub_labs) 
   }
+  return(res)
 }
 
+ExtDataWeightSim <- function(data, n_reps, sampsize, n = 50000, ...){
+  indx <- seq(1, n)
+  sub_data <- rbind(data[sample(indx, sampsize*n_reps/2), ], data[sample(indx, sampsize*n_reps/2) + n, ]) 
+  out <- WeightSimExp(n_reps = n_reps, data = sub_data, ...)
+  return(out)
+}
+CS_weights40 <- ExtDataWeightSim(data[["circles"]], sampsize = 40, n_reps = 100)
+LS_weights40 <- ExtDataWeightSim(data[["linear"]], sampsize = 40, n_reps = 100)
+plot(log(apply(CS_weights40, 2, mean)))
+plot(log(apply(LS_weights40, 2, mean)))
 ```
 
