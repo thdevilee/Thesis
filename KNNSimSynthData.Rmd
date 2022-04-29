@@ -66,6 +66,13 @@ create_folds <- function(n_folds, labs, balanced = TRUE, force = FALSE){
   return(folds)
 }
 
+comp_dist <- function(x, method = "euclidian", scale = FALSE){
+  if(scale == TRUE) x <- scale(x)
+  if(method == "euclidian") out <- as.matrix(dist(x, diag = TRUE, upper = TRUE))
+  if(method == "cor") out <- as.matrix(cor(t(x), method = "pearson"))
+  return(out)
+} 
+
 ### function to compute knn ordering matrix for a given distance matrix
 knn_mat <- function(dist_mat){
   n <- nrow(dist_mat) ### number of observations
@@ -167,6 +174,7 @@ nestedcv.knn <- function(folds, regs, labs){
 }
 ### function to compute perform nested ridge
 nestedcv.ridge <- function(folds, regs, labs){
+  regs <- apply(regs, 2, as.numeric) ### makes sure all columns are numeric
   n_folds <- max(folds) ### number of folds
   res_outer <- numeric(n_folds) ### initialize output 
   for(i in 1:n_folds){ 
@@ -192,7 +200,7 @@ linear.gt <- function(regs, labs){
 ### function to perform unweighted and inverse weighted overall global test
 overall.gt <- function(regs, labs, invweighted = FALSE){
   n <- nrow(regs) ### compute number of observations
-  dist_mat <- as.matrix(dist(regs, diag = TRUE, upper = TRUE)) ### compute distance matrix
+  dist_mat <- comp_dist(regs) ### compute distance matrix
   ord_mat <- knn_mat(dist_mat) ### compute ordering matrix
   weights <- numeric(n) ### initialize weight vector
   if (invweighted){ ### if inverse weights
@@ -217,7 +225,7 @@ overall.gt <- function(regs, labs, invweighted = FALSE){
 prop.knn_gt <- function(regs, labs){
   prop <- mean(labs[["y"]]) ### compute fraction of labels
   prop <- min(prop, 1 - prop) ### select the smallest fraction
-  dist_mat <- as.matrix(dist(regs, diag = TRUE, upper = TRUE)) ### compute distance matrix
+  dist_mat <- comp_dist(regs) ### compute distance matrix
   ord_mat <- knn_mat(dist_mat) ### compute ordering mat
   P <- ifelse(ord_mat > nrow(regs) - prop*nrow(regs), 1, 0) ### compute partition matrix corresponding to the smallest fraction of labels
   res <- gt(y ~ 1, y ~ ., data = cbind(P, labs))@result[1] ### compute gt statistic based on partition matrix
@@ -230,7 +238,7 @@ pval.knn_gt <- function(regs, labs, balanced = TRUE, force = FALSE){
   folds <- create_folds(n_folds = 2, labs = labs, balanced = balanced, force = force) ### create folds such that the groups are balanced
   n_train <- sum(folds != i) ### compute the number of observations in each folds
   neighbours <- round(seq(2, n_train - 1, length.out = round(sqrt(n_train))))
-  dist_mat <- as.matrix(dist(regs[folds != i, ], diag = TRUE, upper = TRUE)) ### compute distance matrix
+  dist_mat <- comp_dist(regs[folds != i, ]) ### compute distance matrix
   ord_mat <- knn_mat(dist_mat) ### compute ordering mat
   p_vals <- numeric(length(neighbours)) ### initialize vector for p-values
   for (j in 1:length(neighbours)){ ### for all 2, ..., k neighbours
@@ -239,7 +247,7 @@ pval.knn_gt <- function(regs, labs, balanced = TRUE, force = FALSE){
     }
     optimal_k <- which.min(p_vals) ### select k which corresponds to smallest p-value
     n_test <- sum(folds == i) ### compute number of observations in validation set
-    dist_mat <- as.matrix(dist(regs[folds == i, ], diag = TRUE, upper = TRUE)) ### compute distance matrix
+    dist_mat <- comp_dist(regs[folds == i, ]) ### compute distance matrix
     ord_mat <- knn_mat(dist_mat) ### compute ordering mat
     P <- ifelse(ord_mat > (n_test - optimal_k), 1, 0) ### compute partition matrix for optimal k
     res <- gt(y ~ 1, y ~ ., data = cbind(P, labs[folds == i, ]))@result[1] ### perform global test
@@ -248,7 +256,7 @@ pval.knn_gt <- function(regs, labs, balanced = TRUE, force = FALSE){
 
 overall.gt <- function(regs, labs, invweighted = FALSE){
   n <- nrow(regs) ### compute number of observations
-  dist_mat <- as.matrix(dist(regs, diag = TRUE, upper = TRUE)) ### compute distance matrix
+  dist_mat <- comp_dist(regs) ### compute distance matrix
   ord_mat <- knn_mat(dist_mat) ### compute ordering matrix
   P <- P_iw <- vector(mode = "list", length = n)
   for(i in 1:n){ ### for all 1, ..., k neighbours
@@ -373,11 +381,11 @@ CheckerSim <- function(n_reps, n, n_clusts, ...){
 
 
 ```{r}
-CS_nclusts <- CheckerSim(n_reps = 100, n = 3, n_clusts = c(3, 5), pckgs = pckgs, force = TRUE)
+CBS_nclusts <- CheckerSim(n_reps = 100, n = 3, n_clusts = c(3, 5), pckgs = pckgs, force = TRUE)
 ```
 
 ```{r}
-CheckerSim(n_reps = 100, n = c(2, 5, 10), n_clusts = 3, pckgs = pckgs, force = TRUE)
+CBS_n <- CheckerSim(n_reps = 100, n = c(2, 5, 10), n_clusts = 3, pckgs = pckgs, force = TRUE)
 ```
 
 
@@ -438,10 +446,12 @@ folds <- create_folds(n_folds = 5, labs = labs)
 ```
 
 
+### Weight experiment inversely weighted (variance) overall global test
+
 ```{r}
 weights_gt <- function(regs, labs){
   n <- nrow(regs) ### compute number of observations
-  dist_mat <- as.matrix(dist(regs, diag = TRUE, upper = TRUE)) ### compute distance matrix
+  dist_mat <- comp_dist(regs) ### compute distance matrix
   ord_mat <- knn_mat(dist_mat) ### compute ordering matrix
   P <- vector(mode = "list", length = n)
   weights <- numeric(n)
@@ -478,5 +488,82 @@ CS_weights40 <- ExtDataWeightSim(data[["circles"]], sampsize = 40, n_reps = 100)
 LS_weights40 <- ExtDataWeightSim(data[["linear"]], sampsize = 40, n_reps = 100)
 plot(log(apply(CS_weights40, 2, mean)))
 plot(log(apply(LS_weights40, 2, mean)))
+```
+
+```{r}
+CheckerWeightSim <- function(n_reps, n, n_clusts, ...){
+  sampsize <- n_clusts^2 * n
+  indx <- as.vector(sapply(1:n_reps, function(x, sampsize) rep(x, sampsize), sampsize = sampsize))
+  data <- lapply(1:n_reps, FUN = function(x, n, n_clusts) CheckerSamp(n = n, n_clusts = n_clusts),
+                   n = n, n_clusts = n_clusts)
+  data <- as_tibble(do.call(rbind, data))
+  out <- WeightSimExp(n_reps = n_reps, data = data, indx = indx, ...)
+  
+  return(out)
+}
+CBS_weight <- CheckerWeightSim(n_reps = 100, n = 3, n_clusts = 3, force = TRUE)
+plot(log(apply(LDAS_weight, 2, mean)))
+```
+
+```{r}
+LDAWeightSim <- function(sampsize, n_reps, effect, p, ...){
+  data <- as_tibble(LDASamp(n_samples = sampsize * n_reps, p = p, effect = effect))
+  out <- WeightSimExp(n_reps = n_reps, data = data, ...)
+  return(out)
+}
+LDAS_weight <- LDAWeightSim(sampsize = 40, n_reps = 100, effect = 25, p = 2)
+plot(log(apply(LDAS_weight, 2, mean)))
+```
+```{r}
+comp_dist <- function(X){
+  n <- nrow(X)
+  nom_indx <- unlist(lapply(X, function(x) as.logical(is.factor(x) + is.character(x))))
+  dist_nom <- dist_num <- matrix(0, nrow = n, ncol = n)
+  
+  if(ncol(X) - sum(as.numeric(nom_indx)) > 0){
+    X_num <- scale(X[, !nom_indx])
+    dist_num <- as.matrix(dist(X_num, diag = TRUE, upper = TRUE))^2
+  }
+  
+  if(sum(as.numeric(nom_indx)) > 0){
+    X_nom <- X[, nom_indx]
+    for(i in 1:(n - 1)){
+      for(j in (i + 1):n){
+        dist_nom[i, j] <- sum(X_nom[i,] != X_nom[j,])
+      }
+    }
+    dist_nom[lower.tri(dist_nom)] <- dist_nom[upper.tri(dist_nom)]
+  }
+  
+  return(sqrt(dist_num + dist_nom))
+} 
+comp_dist(tmp)
+```
+
+```{r}
+all.tests <- function(regs, labs, pckgs, n_perms = 100, ...){
+  res <- rep(NA, 7)
+  folds <- create_folds(n_folds = 5, labs = labs, ...) ### create folds for functions that require cross validation
+  res[1] <- linear.gt(regs = regs, labs = labs) ### compute p-value of the linear global test
+  ridge_stat <- nestedcv.ridge(folds = folds, regs = regs, labs = labs) ### compute test statistic for the nested ridge
+  knn_stat <- nestedcv.knn(folds = folds, regs = regs, labs = labs) ### compute test statistic for the nested knn
+  res[4] <- prop.knn_gt(regs = regs, labs = labs) ### compute p-value for the global test on the partition matrix based on the label proportion
+  res[5] <- pval.knn_gt(regs = regs, labs = labs, ...) ### compute p-value for the global test based on the value of k which has the smallest p-value in the training set
+  res[c(6, 7)] <- overall.gt(regs = regs, labs = labs, invweighted = TRUE) ### compute unweighted and inversely weighted overall gloval test
+    
+  perm_mat <- foreach(j = 1:n_perms, .combine = "cbind", .export = pckgs) %dopar% { ### for n_perms replications
+    perm_indx <- sample(nrow(labs)) ### permutation index
+    perm_regs <- regs[perm_indx, ] ### permute regressors
+    perm_folds <- create_folds(n_folds = 5, labs = labs, ...) ### compute folds
+    perm_ridge <- nestedcv.ridge(folds = perm_folds, regs = perm_regs, labs = labs) ### compute (permuted) test statistic for the nested ridge
+    perm_knn <- nestedcv.knn(folds = perm_folds, regs = perm_regs, labs = labs) ### compute (permuted) test statistic for the nested knn
+    matrix(c(perm_ridge, perm_knn), nrow = 2) ### return permuted test statistics for both tests
+    }
+  res[2] <- 1- mean(ridge_stat >= perm_mat[1, ]) ### compute emperical p-value for nested ridge
+  res[3] <- 1- mean(knn_stat >= perm_mat[2, ]) ### compute emperical p-value for nested knn
+  names(res) <- c("linear.gt", "nestedcv.ridge", "nestedcv.knn", "prop.knn_gt", "pval.knn_gt", "overall.gt", "invoverall.gt") ### assign names to the output
+  return(res)
+}
+all.tests(regs = regs, labs = labs, pckgs = pckgs, n_perms = 10)
 ```
 
