@@ -10,8 +10,39 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
 
 ```{r}
-RF <- function(data){
+randomsplit <- function(regs, indx, nodesize = 1){
+  unq_indx <- unique(indx)
+  splt_indx <- rep(NA, nrow(regs))
   
+  for (i in 1:length(unq_indx)){
+    sub_indx <- indx == unq_indx[i]
+    if(sum(as.numeric(sub_indx)) <= nodesize) next
+    splt_indx[sub_indx] <- 1
+    sub_regs <- regs[sub_indx, ]
+    rcol <- sample(1:ncol(regs), size = 1)
+    rrow <- sample(1:nrow(sub_regs), size = 1)
+    cond_indx <- sub_regs[rrow, rcol] >= sub_regs[, rcol]
+    splt_indx[sub_indx][cond_indx] <- 2
+  }
+  return(as.character(splt_indx))
 }
+
+randomsplit(tmp, rep("1", nrow(tmp)))
+
+gensplits <- function(regs, labs, maxdepth = NA, maxnodes = NA, nodesize = 1){
+  if (is.na(maxnodes)) maxnodes <- nrow(regs)
+  if (is.na(maxdepth)) maxdepth <- nrow(regs)
+  indx <- rep("1", nrow(regs))
+  
+  while(maxdepth > max(nchar(indx)) - 1 & length(unique(indx)) < maxnodes){
+    print(indx)
+    updt_indx <- randomsplit(regs, indx, nodesize = nodesize)
+    tmp <- !is.na(updt_indx)
+    indx[tmp] <- paste0(indx[tmp], updt_indx[tmp])
+  }
+  return(indx)
+}
+
+tmp10 <- gensplits(tmp, sample(c(0, 1), size = 20, replace = TRUE), nodesize = 2)
 ```
 
