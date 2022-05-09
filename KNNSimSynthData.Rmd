@@ -69,7 +69,7 @@ create_folds <- function(n_folds, labs, balanced = TRUE, force = FALSE){
 comp_dist <- function(x, method = "euclidian", scale = FALSE){
   if(scale == TRUE) x <- scale(x)
   if(method == "euclidian") out <- as.matrix(dist(x, diag = TRUE, upper = TRUE))
-  if(method == "cor") out <- as.matrix(cor(t(x), method = "pearson"))
+  if(method == "cor") out <- 1 - as.matrix(cor(t(x), method = "pearson"))
   return(out)
 } 
 
