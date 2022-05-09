@@ -1,0 +1,17 @@
+---
+title: "KNN simulation synthetic data"
+author: "Thomas Devilee"
+date: "9-5-2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r}
+RF <- function(data){
+  
+}
+```
+
