@@ -10,13 +10,15 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
 
 ```{r}
+tmp <- matrix(rnorm(200), nrow = 20, ncol = 10)
+
 randomsplit <- function(regs, indx, nodesize = 1){
   unq_indx <- unique(indx)
   splt_indx <- rep(NA, nrow(regs))
   
   for (i in 1:length(unq_indx)){
     sub_indx <- indx == unq_indx[i]
-    if(sum(as.numeric(sub_indx)) <= nodesize) next
+    if(sum(as.numeric(sub_indx)) < 2*nodesize) next
     splt_indx[sub_indx] <- 1
     sub_regs <- regs[sub_indx, ]
     rcol <- sample(1:ncol(regs), size = 1)
@@ -27,22 +29,39 @@ randomsplit <- function(regs, indx, nodesize = 1){
   return(as.character(splt_indx))
 }
 
+updatesplit <- function(regs, old_indx, nodesize){
+  out <- old_indx
+  updt_indx <- randomsplit(regs = regs, indx = old_indx, nodesize = nodesize)
+  log_indx <- !is.na(updt_indx)
+  out[log_indx] <- paste0(old_indx[log_indx], updt_indx[log_indx])
+  return(out)
+}
+
 randomsplit(tmp, rep("1", nrow(tmp)))
 
 gensplits <- function(regs, labs, maxdepth = NA, maxnodes = NA, nodesize = 1){
   if (is.na(maxnodes)) maxnodes <- nrow(regs)
   if (is.na(maxdepth)) maxdepth <- nrow(regs)
   indx <- rep("1", nrow(regs))
+  out <- t(matrix(indx))
   
-  while(maxdepth > max(nchar(indx)) - 1 & length(unique(indx)) < maxnodes){
-    print(indx)
-    updt_indx <- randomsplit(regs, indx, nodesize = nodesize)
-    tmp <- !is.na(updt_indx)
-    indx[tmp] <- paste0(indx[tmp], updt_indx[tmp])
+  i <- 1
+  while (maxdepth > max(nchar(out[i, ])) - 1 & length(unique(out[i, ])) < maxnodes & !all(table(out[i, ]) < 2*nodesize)){
+    out <- rbind(out[1:i, ], out[i, ])
+    out[i + 1, ] <- updatesplit(regs = regs, old_indx = out[i, ], nodesize = nodesize)
+      
+    while(any(table(out[i + 1, ]) < nodesize)){
+      out[i + 1, ] <- updatesplit(regs = regs, old_indx = out[i, ], nodesize = nodesize)
+    }
+    i <- i + 1
   }
-  return(indx)
+  return(out[i, ])
 }
 
 tmp10 <- gensplits(tmp, sample(c(0, 1), size = 20, replace = TRUE), nodesize = 2)
+
+tmp30 <- randomsplit(tmp, tmp10, nodesize = 2)
+tmp20 <- !is.na(tmp30)
+table(paste0(tmp10, tmp30[tmp20]))
 ```
 
