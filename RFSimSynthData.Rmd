@@ -12,32 +12,111 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```{r}
 tmp <- matrix(rnorm(200), nrow = 20, ncol = 10)
 
-randomsplit <- function(regs, indx, nodesize = 1){
-  unq_indx <- unique(indx)
+randomsplit <- function(regs, indx, spltb_reg, nodesize = 1){
+  unq_indx <- names(spltb_reg)
   splt_indx <- rep(NA, nrow(regs))
   
   for (i in 1:length(unq_indx)){
     sub_indx <- indx == unq_indx[i]
-    if(sum(as.numeric(sub_indx)) < 2*nodesize) next
-    splt_indx[sub_indx] <- 1
     sub_regs <- regs[sub_indx, ]
-    rcol <- sample(1:ncol(regs), size = 1)
-    rrow <- sample(1:nrow(sub_regs), size = 1)
-    cond_indx <- sub_regs[rrow, rcol] >= sub_regs[, rcol]
-    splt_indx[sub_indx][cond_indx] <- 2
+    if(sum(as.numeric(sub_indx)) < 2*nodesize | all(!spltb_reg[[unq_indx[i]]])) next
+    splt <- TRUE
+    while(splt){
+      splt_indx[sub_indx] <- 1
+      rcol <- sample(seq(1,ncol(regs)), size = 1)
+      rrow <- sample(1:nrow(sub_regs), size = 1)
+      ineq_vec <- parse(text = paste(sub_regs[rrow, rcol], sample(c("<", "<=", ">=", ">"), size = 1), sub_regs[, rcol]))
+      cond_indx <- sapply(ineq_vec, eval)
+      splt_indx[sub_indx][cond_indx] <- 2
+      if (var(splt_indx[sub_indx]) != 0) splt <- FALSE
+    }
   }
   return(as.character(splt_indx))
 }
 
-updatesplit <- function(regs, old_indx, nodesize){
-  out <- old_indx
-  updt_indx <- randomsplit(regs = regs, indx = old_indx, nodesize = nodesize)
+updatesplit <- function(regs, indx, spltb_reg, nodesize){
+  out <- indx
+  updt_indx <- randomsplit(regs = regs, indx = indx, spltb_reg = spltb_reg, nodesize = nodesize)
   log_indx <- !is.na(updt_indx)
-  out[log_indx] <- paste0(old_indx[log_indx], updt_indx[log_indx])
+  out[log_indx] <- paste0(indx[log_indx], updt_indx[log_indx])
   return(out)
 }
 
-randomsplit(tmp, rep("1", nrow(tmp)))
+regsplits <- function(regs, indx, nodesize){
+  indx_names <- unique(indx)
+  out <- vector(mode = "list", length = length(indx_names))
+  names(out) <- indx_names
+  
+  for (i in 1:length(indx_names)){
+    regs_sub <- regs[(indx == indx_names[i]), ]
+    tmp <- vector(mode = "list", length = ncol(regs))
+    
+    for (j in 1:ncol(regs)){
+      cumtable <- table(regs[, j])
+      tmp[[j]] <- (sum(cumtable) - max(cumtable)) >= nodesize
+    }
+    
+    out[[indx_names[i]]] <- drop(do.call(rbind, tmp))
+    
+  }
+  return(out)
+}
+regsplits(tmp, rep(c("1", "2"), 10), nodesize = 1)
+
+gensplits <- function(regs, labs, maxdepth = NA, maxnodes = NA, nodesize = 1){
+  if (is.na(maxnodes)) maxnodes <- nrow(regs)
+  if (is.na(maxdepth)) maxdepth <- nrow(regs)
+  indx <- rep("1", nrow(regs))
+  out <- t(matrix(indx))
+  out <- rbind(out, out)
+  
+  i <- 1
+  spltb_reg <- regsplits(regs, out[i, ], nodesize = nodesize)
+  psbl_split <- any(unlist(spltb_reg))
+  while (max(nchar(out[i, ])) - 1 < maxdepth &
+         length(unique(out[i, ])) < maxnodes &
+         !all(table(out[i, ]) < 2*nodesize) &
+         psbl_split
+         ){
+    tmp <- updatesplit(regs = regs, indx = out[i, ], spltb_reg = spltb_reg, nodesize = nodesize)
+    
+    if(max(nchar(tmp)) - 1 <= maxdepth &
+       length(unique(tmp)) <= maxnodes &
+       all(table(tmp) >= nodesize)){
+      
+      out[i + 1, ] <- tmp
+      i <- i + 1
+      out <- rbind(out[1:i, ], out[i, ])
+      spltb_reg <- regsplits(regs, out[i, ], nodesize = nodesize)
+      psbl_split <- any(unlist(spltb_reg))
+    }
+  }
+  return(out[i, ])
+}
+
+gensplits(tmp, sample(c(0, 1), size = 20, replace = TRUE), nodesize = 2)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+tmp30 <- randomsplit(tmp, tmp10, nodesize = 2)
+tmp20 <- !is.na(tmp30)
+table(paste0(tmp10, tmp30[tmp20]))
+
 
 gensplits <- function(regs, labs, maxdepth = NA, maxnodes = NA, nodesize = 1){
   if (is.na(maxnodes)) maxnodes <- nrow(regs)
@@ -46,7 +125,11 @@ gensplits <- function(regs, labs, maxdepth = NA, maxnodes = NA, nodesize = 1){
   out <- t(matrix(indx))
   
   i <- 1
-  while (maxdepth > max(nchar(out[i, ])) - 1 & length(unique(out[i, ])) < maxnodes & !all(table(out[i, ]) < 2*nodesize)){
+  while (max(nchar(out[i, ])) - 1 < maxdepth &
+         length(unique(out[i, ])) < maxnodes &
+         all(table(out[i, ]) >= 2*nodesize)
+         ){
+    
     out <- rbind(out[1:i, ], out[i, ])
     out[i + 1, ] <- updatesplit(regs = regs, old_indx = out[i, ], nodesize = nodesize)
       
@@ -57,11 +140,5 @@ gensplits <- function(regs, labs, maxdepth = NA, maxnodes = NA, nodesize = 1){
   }
   return(out[i, ])
 }
-
-tmp10 <- gensplits(tmp, sample(c(0, 1), size = 20, replace = TRUE), nodesize = 2)
-
-tmp30 <- randomsplit(tmp, tmp10, nodesize = 2)
-tmp20 <- !is.na(tmp30)
-table(paste0(tmp10, tmp30[tmp20]))
 ```
 
