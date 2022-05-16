@@ -274,6 +274,14 @@ overall.gt <- function(regs, labs, invweighted = FALSE){
   }
   return(res)
 }
+
+overallordinal.gt <- function(regs, labs){
+  dist_mat <- comp_dist(regs) ### compute distance matrix
+  ord_mat <- knn_mat(dist_mat) ### compute ordering matrix
+  X  <- apply(ord_mat, 2, rank)
+  res <- globaltest::gt(y ~ 1, y ~ ., data = data.frame(X, y = labs))@result[1]
+  return(res)
+}
 ```
 
 
