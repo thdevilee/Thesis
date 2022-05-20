@@ -25,6 +25,7 @@ library(dplyr)
 library(MASS)
 library(gridExtra)
 library(tidyr)
+source("sampling_funcs.R")
 set.seed(1979418)
 
 ### function to read excel files in the current directory in the format "sim_X.xlsx"
@@ -294,8 +295,8 @@ SimExp <- function(data, n_reps, pckgs, indx = NA, n_perms = 100, ...){
   if(all(is.na(indx))){ ### if no weights specified
     indx <- create_folds(n_folds = n_reps, labs = labs, ...) ### compute folds equal to the number of replications
   }
-  res <- matrix(data = NA, nrow = n_reps, ncol = 7) ### initialize output matrix
-  colnames(res) <- c("linear.gt", "nestedcv.ridge", "nestedcv.knn", "prop.knn_gt", "pval.knn_gt", "overall.gt", "invoverall.gt") ### assign names to the output matrix
+  res <- matrix(data = NA, nrow = n_reps, ncol = 8) ### initialize output matrix
+  colnames(res) <- c("linear.gt", "nestedcv.ridge", "nestedcv.knn", "prop.knn_gt", "pval.knn_gt", "overall.gt", "invoverall.gt", "overordinall.gt") ### assign names to the output matrix
   
   for(i in 1:max(indx)){ ### for each folds
     sub_regs <- regs[indx == i,] ### select regressor subset
@@ -307,6 +308,7 @@ SimExp <- function(data, n_reps, pckgs, indx = NA, n_perms = 100, ...){
     res[i, 4] <- prop.knn_gt(regs = sub_regs, labs = sub_labs) ### compute p-value for the global test on the partition matrix based on the label proportion
     res[i, 5] <- pval.knn_gt(regs = sub_regs, labs = sub_labs, ...) ### compute p-value for the global test based on the value of k which has the smallest p-value in the training set
     res[i, c(6, 7)] <- overall.gt(regs = sub_regs, labs = sub_labs, invweighted = TRUE) ### compute unweighted and inversely weighted overall gloval test
+    res[i, 8] <- overallordinal.gt(regs = sub_regs, labs = sub_labs) ### compute unweighted and inversely weighted overall gloval test
     
     perm_mat <- foreach(j = 1:n_perms, .combine = "cbind", .export = pckgs) %dopar% { ### for n_perms replications
       perm_indx <- sample(nrow(sub_labs)) ### permutation index
@@ -316,8 +318,8 @@ SimExp <- function(data, n_reps, pckgs, indx = NA, n_perms = 100, ...){
       perm_knn <- nestedcv.knn(folds = perm_folds, regs = perm_regs, labs = sub_labs) ### compute (permuted) test statistic for the nested knn
       matrix(c(perm_ridge, perm_knn), nrow = 2) ### return permuted test statistics for both tests
     }
-    res[i, 2] <- 1- mean(ridge_stat >= perm_mat[1, ]) ### compute emperical p-value for nested ridge
-    res[i, 3] <- 1- mean(knn_stat >= perm_mat[2, ]) ### compute emperical p-value for nested knn
+    res[i, 2] <- 1- mean(ridge_stat > perm_mat[1, ]) ### compute emperical p-value for nested ridge
+    res[i, 3] <- 1- mean(knn_stat > perm_mat[2, ]) ### compute emperical p-value for nested knn
   }
   return(res)
 }
@@ -343,21 +345,9 @@ LS_samp40 <- ExtDataSim(data[["linear"]], sampsize = 40, pckgs = pckgs, n_reps =
 ```
 
 ```{r}
-### function to take a sample that follows a checkerboard pattern. Here p represents the number of dimensions, n the number of observations per position on the checkerboard, n_clusts the number of clusters (use an uneven number, an even number gives a stripes pattern)
-CheckerSamp <- function(n, n_clusts, p = 2, c = 1){
-  data <- matrix(runif((n_clusts^2)*n * p), nrow = (n_clusts^2)*n, ncol = p) ### draw from uniform
-  shift <- expand.grid(seq(0, n_clusts - 1), seq(0, n_clusts - 1)) ### compute shift
-  shift <- do.call(rbind, replicate(n, shift, simplify = FALSE))*c ### replicate shift such that each cluster has n obs
-  labs <- rep(c(FALSE, TRUE), ceiling(n_clusts^2/2))[1:(n_clusts^2)] ### generate labs
-  labs <- rep(labs, n) ### replicate labs such that every obs has a label according to its cluster
-  data <- data + shift ### compute shifted regressors
-  data <- cbind(data, labs) ### combine regressors and labels into matrix
-  names(data) <- c("x1", "x2", "y") ### rename columns
-  indx <- order(data[["y"]])
-  data <- data[indx, ]
-  return(data)
-}
+png("checkerboardplot.png")
 ggplot(CheckerSamp(p = 2, n = 5, n_clusts = 3, c = 1), aes(x = x1, y = x2, colour = y)) + geom_point()
+dev.off()
 ```
 
 ```{r}
@@ -398,21 +388,9 @@ CBS_n <- CheckerSim(n_reps = 100, n = c(2, 5, 10), n_clusts = 3, pckgs = pckgs, 
 
 
 ```{r}
-LDASamp <- function(n_samples, p, effect){
-  inv_vcov <- solve(diag(p)) ### inverse of the covariance matrix (mahalanobis distance) (must be identity in this case)
-  e_vec <- rep(1,p) ### e vector (mahalanobis distance)
-  c <- sqrt( effect / (n_samples * (e_vec %*% inv_vcov %*% e_vec)) ) ### compute constant as a function of the effect size (mahalanobis distance)
-  shift <- matrix(effect*c, nrow=n_samples/2, ncol=p, byrow = TRUE) ### compute the shift for one class
-  labs <- sample(rep(c(TRUE, FALSE), n_samples/2)) ### randomly sample labels (balanced)
-  noise <- matrix(rnorm(n_samples*p), ncol = p, nrow = n_samples) ### generate regressor (independent standard normal)
-  noise[labs,] <- noise[labs,] + shift ### compute shifted regressors 
-  indx <- order(labs) ### sort labels (required for power_knn func)
-  labs <- labs[indx] ### order labels
-  noise <- noise[indx, ] ### order regressor in the same sequence
-  output <- data.frame(noise, labs) ### concatenate regressors and labels into dataframe
-  names(output) <- c(paste0("x", 1:p), "y") ### change column names
-  return(output)
-}
+png("LDAplot.png")
+ggplot(LDASamp(n_samples = 40, p = 2, effect = 25), aes(x = x1, y = x2, colour = y)) + geom_point()
+dev.off()
 ```
 
 ```{r}
@@ -567,8 +545,8 @@ all.tests <- function(regs, labs, pckgs, n_perms = 100, ...){
     perm_knn <- nestedcv.knn(folds = perm_folds, regs = perm_regs, labs = labs) ### compute (permuted) test statistic for the nested knn
     matrix(c(perm_ridge, perm_knn), nrow = 2) ### return permuted test statistics for both tests
     }
-  res[2] <- 1- mean(ridge_stat >= perm_mat[1, ]) ### compute emperical p-value for nested ridge
-  res[3] <- 1- mean(knn_stat >= perm_mat[2, ]) ### compute emperical p-value for nested knn
+  res[2] <- 1- mean(ridge_stat > perm_mat[1, ]) ### compute emperical p-value for nested ridge
+  res[3] <- 1- mean(knn_stat > perm_mat[2, ]) ### compute emperical p-value for nested knn
   names(res) <- c("linear.gt", "nestedcv.ridge", "nestedcv.knn", "prop.knn_gt", "pval.knn_gt", "overall.gt", "invoverall.gt") ### assign names to the output
   return(res)
 }

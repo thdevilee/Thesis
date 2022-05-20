@@ -10,6 +10,12 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
 
 ```{r}
+library(foreach)
+source("sampling_funcs.R")
+```
+
+
+```{r}
 tmp <- matrix(rnorm(200), nrow = 20, ncol = 10)
 
 randomsplit <- function(regs, indx, spltb_reg, nodesize, leafsize = 1){
@@ -98,64 +104,59 @@ gensplits <- function(regs, maxdepth = NA, maxnodes = NA, nodesize = NA, leafsiz
   return(out[i, ])
 }
 
-gentree <- function(regs, maxdepth = NA, maxnodes = NA, nodesize = NA, leafsize = 1){
-  splts <- gensplits(regs = regs, maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize, leafsize = leafsize)
-  out <- sapply(splts, FUN = function(x) as.numeric(substr(x, nchar(x), nchar(x)) == 2))
-  return(out)
-}
-
-randomRF <- function(regs, n_tree, maxdepth = NA, maxnodes = NA, nodesize = NA, leafsize = 1){
-  out <- replicate(n_tree, expr = gentree(regs = regs, maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize, leafsize = leafsize))
-  return(out)
-}
-
-
-
-gensplits(tmp, sample(c(0, 1), size = 20, replace = TRUE), leafsize = 2)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-tmp30 <- randomsplit(tmp, tmp10, leafsize = 2)
-tmp20 <- !is.na(tmp30)
-table(paste0(tmp10, tmp30[tmp20]))
-
-
-gensplits <- function(regs, maxdepth = NA, maxnodes = NA, leafsize = 1){
-  if (is.na(maxnodes)) maxnodes <- nrow(regs)
-  if (is.na(maxdepth)) maxdepth <- nrow(regs)
-  indx <- rep("1", nrow(regs))
-  out <- t(matrix(indx))
-  
-  i <- 1
-  while (max(nchar(out[i, ])) - 1 < maxdepth &
-         length(unique(out[i, ])) < maxnodes &
-         all(table(out[i, ]) >= 2*leafsize)
-         ){
-    
-    out <- rbind(out[1:i, ], out[i, ])
-    out[i + 1, ] <- updatesplit(regs = regs, old_indx = out[i, ], leafsize = leafsize)
-      
-    while(any(table(out[i + 1, ]) < leafsize)){
-      out[i + 1, ] <- updatesplit(regs = regs, old_indx = out[i, ], leafsize = leafsize)
-    }
-    i <- i + 1
+gentrees <- function(regs, n_tree, maxdepth = NA, maxnodes = NA, nodesize = NA, leafsize = 1){
+  pckgs <- as.vector(lsf.str(.GlobalEnv))
+  out <- foreach(j = 1:n_tree, .combine = "cbind", .export = pckgs) %dopar% {
+    splts <- gensplits(regs = regs, maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize, leafsize = leafsize)
+    sapply(splts, FUN = function(x) as.numeric(substr(x, nchar(x), nchar(x)) == 2))
   }
-  return(out[i, ])
+  rownames(out) <- NULL
+  colnames(out) <- 1:n_tree
+  return(out)
+}
+
+S <- function(X, y){
+  num <- sum((t(y) %*% X)^2)
+  denom <- t(y)  %*% y
+  return(drop(num/denom))
+}
+
+
+randomRF <- function(regs, labs, n_tree, n_perms, maxdepth = NA, maxnodes = NA, nodesize = NA, leafsize = 1){
+  y <- as.matrix(as.numeric(labs))
+  pckgs <- as.vector(lsf.str(.GlobalEnv))
+  X <- gentrees(regs = regs, n_tree = n_tree, maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize, leafsize = leafsize)
+  stat <- S(X, y)
+  
+  permed_stat <- foreach(j = 1:n_perms, .combine = "c", .export = pckgs) %dopar% {
+    yp <- y[sample(nrow(y)), ]
+    S(X, yp)
+  }
+  return(1 - mean(stat > permed_stat))
+}
+
+randomRF(tmp, data.frame(sample(c(0, 1), replace = TRUE, size = 20)), leafsize = 3, n_tree = 100, n_perms = 1000)
+
+LDASim <- function(sampsize, n_reps, n_tree, n_perms, maxdepth = NA, maxnodes = NA, nodesize = NA, leafsize = 1){
+  indx_args <- c(length(sampsize) > 1, length(effect) > 1, length(sampsize) > 1)
+  if(sum(as.numeric(indx_args)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
+  var_name <- c("p", "effect", "sampsize")[indx_args]
+  params <- cbind(p, effect, sampsize) ### parameter space
+}
+```
+
+```{r}
+n_perms <- 1000
+leafsize <- 5
+n_tree <- c(50, 100, 250, 500, 1000)
+reps <- 100
+linear_data <- LDASamp(n_samples = 20, p = 2, effect = 25)
+
+res <- vector(mode = "list", length = length(n_tree))
+for (i in 1:length(n_tree)){
+  res[[i]] <- replicate(reps, expr = 
+                          randomRF(linear_data[, c("x1", "x2")], linear_data[, c("y")], n_tree = n_tree[i], n_perms = n_perms, leafsize = leafsize)
+                        )
 }
 ```
 
