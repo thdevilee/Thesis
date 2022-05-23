@@ -134,29 +134,45 @@ randomRF <- function(regs, labs, n_tree, n_perms, maxdepth = NA, maxnodes = NA, 
   }
   return(1 - mean(stat > permed_stat))
 }
+```
 
-randomRF(tmp, data.frame(sample(c(0, 1), replace = TRUE, size = 20)), leafsize = 3, n_tree = 100, n_perms = 1000)
-
-LDASim <- function(sampsize, n_reps, n_tree, n_perms, maxdepth = NA, maxnodes = NA, nodesize = NA, leafsize = 1){
-  indx_args <- c(length(sampsize) > 1, length(effect) > 1, length(sampsize) > 1)
-  if(sum(as.numeric(indx_args)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
-  var_name <- c("p", "effect", "sampsize")[indx_args]
-  params <- cbind(p, effect, sampsize) ### parameter space
+```{r}
+StabExp <- function(n_tree, data, reps = 100, n_perms = 1000, leafsize = 5){
+  labs <- data[, "y"] ### extract labels
+  regs <- data[, !names(data) %in% "y"] ### extract predictors
+  out <- vector(mode = "list", length = length(n_tree))
+  for (i in 1:length(n_tree)){
+    out[[i]] <- replicate(reps, expr = 
+                             randomRF(regs = regs, labs = labs, n_tree = n_tree[i], n_perms = n_perms, leafsize = leafsize)
+    )
+  }
+  return(out)
 }
 ```
 
 ```{r}
-n_perms <- 1000
-leafsize <- 5
 n_tree <- c(50, 100, 250, 500, 1000)
-reps <- 100
-linear_data <- LDASamp(n_samples = 20, p = 2, effect = 25)
+LDA20 <- LDASamp(n_samples = 20, p = 2, effect = 25)
+StabLDA20 <- StabExp(n_tree = n_tree, data = LDA20, reps = 100, leafsize = 5)
+```
 
-res <- vector(mode = "list", length = length(n_tree))
-for (i in 1:length(n_tree)){
-  res[[i]] <- replicate(reps, expr = 
-                          randomRF(linear_data[, c("x1", "x2")], linear_data[, c("y")], n_tree = n_tree[i], n_perms = n_perms, leafsize = leafsize)
-                        )
-}
+```{r}
+LDA40 <- LDASamp(n_samples = 40, p = 2, effect = 25)
+StabLDA40 <- StabExp(n_tree = n_tree, data = LDA40, reps = 100, leafsize = 8)
+```
+
+```{r}
+LDA40 <- LDASamp(n_samples = 80, p = 2, effect = 25)
+StabLDA80 <- StabExp(n_tree = n_tree, data = LDA80, reps = 10, leafsize = 16)
+```
+
+```{r}
+CS20 <- CheckerSamp(n = 20, n_clusts = 3)
+StabCS40 <- StabExp(n_tree = n_tree, data = CS20, reps = 100, leafsize = 60)
+```
+
+```{r}
+CS40 <- CheckerSamp(n = 40, n_clusts = 3)
+StabCS40 <- StabExp(n_tree = n_tree, data = CS40, reps = 100, leafsize = 125)
 ```
 
