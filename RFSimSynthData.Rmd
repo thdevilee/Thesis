@@ -11,7 +11,9 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 
 ```{r}
 library(foreach)
+library(tidyverse)
 source("sampling_funcs.R")
+set.seed(1979418)
 ```
 
 
@@ -123,7 +125,7 @@ S <- function(X, y){
 
 
 randomRF <- function(regs, labs, n_tree, n_perms, maxdepth = NA, maxnodes = NA, nodesize = NA, leafsize = 1){
-  y <- as.matrix(as.numeric(labs))
+  y <- as.matrix(labs)
   pckgs <- as.vector(lsf.str(.GlobalEnv))
   X <- gentrees(regs = regs, n_tree = n_tree, maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize, leafsize = leafsize)
   stat <- S(X, y)
@@ -157,11 +159,31 @@ StabExp <- function(n_tree, data, n_reps = 100, n_perms = 1000, leafsize = 5, ma
 ```
 
 ```{r}
+create_folds <- function(n_folds, labs, balanced = TRUE, force = FALSE){
+  if(balanced){
+    if (any(order(as.numeric(labs[["y"]])) != seq(1, nrow(labs)))) stop("Data (labels) is not sorted") ### checks if the above requirments are met
+    n1 <- nrow(labs) - sum(as.numeric(labs[["y"]]))
+    n2 <- sum(as.numeric(labs[["y"]]))
+    reps1 <- n1/n_folds
+    reps2 <- n2/n_folds
+    if ((!is.int(reps1) | !is.int(reps2)) & !force) stop("Cannot balance folds")
+    folds1 <- rep(seq(1, n_folds), ceiling(reps1))[1:n1] ### create n fold indexes for group 1
+    folds2 <- rep(seq(1, n_folds), ceiling(reps2))[1:n2] ### create n fold indexes for group 2
+    folds <- c(sample(folds1), sample(folds2)) ### randomly assign indexes to each observation in a balanced fashion
+  } else{
+    folds <- sample(rep(seq(1, n_folds), nrow(labs)/n_folds)) ### randomly assign folds if balanced is false
+  }
+  return(folds)
+}
+
 SimExp <- function(data, n_reps, n_tree, indx = NA, n_perms = 1000, leafsize = 5, maxdepth = NA, maxnodes = NA, nodesize = NA){
   labs <- data[, "y"] ### extract labels
   regs <- data[, !names(data) %in% "y"] ### extract predictors
   res <- matrix(data = NA, nrow = n_reps, ncol = 1) ### initialize output matrix ### initialize output matrix
  ### assign names to the output matrix
+  if(all(is.na(indx))){ ### if no weights specified
+    indx <- create_folds(n_folds = n_reps, labs = labs) ### compute folds equal to the number of replications
+  }
   
   for(i in 1:max(indx)){ ### for each folds
     sub_regs <- regs[indx == i,] ### select regressor subset
@@ -170,6 +192,20 @@ SimExp <- function(data, n_reps, n_tree, indx = NA, n_perms = 1000, leafsize = 5
                                       maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize)
   }
   return(res)
+}
+
+pltmedquant <- function(data, nms = NA){
+  if(is.na(nms)) nms <- 1:length(data)
+  data_wide <- as.data.frame(do.call(rbind, StabLDA20))
+  colnames(data_wide) <- 1:ncol(data_wide)
+  data_wide <- cbind(data_wide, n_tree = nms)
+  data_long <- pivot_longer(data_wide, !last_col(), names_to = "reps", values_to = "p_value")
+  out <- ggplot(data = data_long) + geom_pointrange(mapping = aes(x = n_tree, y = log10(p_value)),
+                  stat = "summary",
+                  fun.min = function(z) {quantile(z,0.025)},
+                  fun.max = function(z) {quantile(z,0.975)},
+                  fun = median) + ylab("log10 p-value") + xlab("Number of trees")
+  return(out)
 }
 ```
 
@@ -200,11 +236,11 @@ StabCS40 <- StabExp(n_tree = n_tree, data = CS40, n_reps = 100, leafsize = 125)
 ```
 
 ```{r}
-CheckerSim <- function(n_reps, n, n_clusts, n_perms = 1000, leafsize = 5, maxdepth = NA, maxnodes = NA, nodesize = NA){
-  indx_args <- c(length(n) > 1, length(n_clusts) > 1)
+CheckerSim <- function(n_reps, n, n_clusts, n_perms = 1000, n_tree = 250, leafsize = 5, maxdepth = NA, maxnodes = NA, nodesize = NA){
+  indx_args <- c(length(n) > 1, length(n_clusts) > 1, length(n_tree) > 1, length(leafsize) > 1, length(maxdepth) > 1, length(maxnodes) > 1, length(nodesize) > 1)
   if(sum(as.numeric(indx_args)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
-  var_name <- c("n", "n_clusts")[indx_args]
-  params <- cbind(n, n_clusts) ### parameter space
+  var_name <- c("n", "n_clusts", "n_tree", "leafsize", "maxdepth", "maxnodes", "nodesize")[indx_args]
+  params <- cbind(n, n_clusts, n_tree, leafsize, maxdepth, maxnodes, nodesize) ### parameter space
   out <- vector(mode = "list", length = nrow(params))
   for (i in 1:nrow(params)){
     sampsize <- params[[i, "n_clusts"]]^2 * params[[i, "n"]]
@@ -212,8 +248,10 @@ CheckerSim <- function(n_reps, n, n_clusts, n_perms = 1000, leafsize = 5, maxdep
     data <- lapply(1:n_reps, FUN = function(x, n, n_clusts) CheckerSamp(n = n, n_clusts = n_clusts),
                    n = params[[i, "n"]], n_clusts = params[[i, "n_clusts"]])
     data <- as_tibble(do.call(rbind, data))
-    tmp <- SimExp(n_reps = n_reps, data = data, indx = indx, n_tree = n_tree, n_perms = n_perms,
-                  leafsize = leafsize, maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize)
+    tmp <- SimExp(n_reps = n_reps, data = data, indx = indx, n_tree = params[[i, "n_tree"]], n_perms = n_perms,
+                  leafsize = params[[i, "leafsize"]], maxdepth = params[[i, "maxdepth"]],
+                  maxnodes = params[[i, "maxnodes"]], nodesize = params[[i, "nodesize"]])
+
     out[[i]] <- EmpericalPower(tmp)
   }
   out <- do.call(rbind, out)
@@ -228,16 +266,17 @@ CheckerSim <- function(n_reps, n, n_clusts, n_perms = 1000, leafsize = 5, maxdep
 ```
 
 ```{r}
-LDASim <- function(sampsize, n_reps, effect, p, n_perms = 1000, leafsize = 5, maxdepth = NA, maxnodes = NA, nodesize = NA){
-  indx_args <- c(length(p) > 1, length(effect) > 1, length(sampsize) > 1)
+LDASim <- function(sampsize, n_reps, effect, p, n_perms = 1000, n_tree = 250, leafsize = 5, maxdepth = NA, maxnodes = NA, nodesize = NA){
+  indx_args <- c(length(p) > 1, length(effect) > 1, length(sampsize) > 1, length(n_tree) > 1, length(leafsize) > 1, length(maxdepth) > 1, length(maxnodes) > 1, length(nodesize) > 1)
   if(sum(as.numeric(indx_args)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
-  var_name <- c("p", "effect", "sampsize")[indx_args]
-  params <- cbind(p, effect, sampsize) ### parameter space
+  var_name <- c("p", "effect", "sampsize", "n_tree", "leafsize", "maxdepth", "maxnodes", "nodesize")[indx_args]
+  params <- cbind(p, effect, sampsize, n_tree, leafsize, maxdepth, maxnodes, nodesize) ### parameter space
   out <- vector(mode = "list", length = nrow(params))
   for (i in 1:nrow(params)){
     data <- as_tibble(LDASamp(n_samples = params[i, "sampsize"] * n_reps, p = params[i, "p"], effect = params[i, "effect"]))
-    tmp <- SimExp(n_reps = n_reps, data = data, indx = indx, n_tree = n_tree, n_perms = n_perms,
-                  leafsize = leafsize, maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize)
+    tmp <- SimExp(n_reps = n_reps, data = data, indx = NA, n_tree = params[[i, "n_tree"]], n_perms = n_perms,
+                  leafsize = params[[i, "leafsize"]], maxdepth = params[[i, "maxdepth"]],
+                  maxnodes = params[[i, "maxnodes"]], nodesize = params[[i, "nodesize"]])
     out[[i]] <- EmpericalPower(tmp)
   }
   out <- do.call(rbind, out)
