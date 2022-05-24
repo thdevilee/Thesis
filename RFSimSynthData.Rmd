@@ -134,16 +134,22 @@ randomRF <- function(regs, labs, n_tree, n_perms, maxdepth = NA, maxnodes = NA, 
   }
   return(1 - mean(stat > permed_stat))
 }
+
+EmpericalPower <- function(data){
+  out <- apply(data, 2, function(x) mean(x < 0.05))
+  return(out)
+}
 ```
 
 ```{r}
-StabExp <- function(n_tree, data, reps = 100, n_perms = 1000, leafsize = 5){
+StabExp <- function(n_tree, data, n_reps = 100, n_perms = 1000, leafsize = 5, maxdepth = NA, maxnodes = NA, nodesize = NA){
   labs <- data[, "y"] ### extract labels
   regs <- data[, !names(data) %in% "y"] ### extract predictors
   out <- vector(mode = "list", length = length(n_tree))
   for (i in 1:length(n_tree)){
-    out[[i]] <- replicate(reps, expr = 
-                             randomRF(regs = regs, labs = labs, n_tree = n_tree[i], n_perms = n_perms, leafsize = leafsize)
+    out[[i]] <- replicate(n_reps, expr = 
+                             randomRF(regs = regs, labs = labs, n_tree = n_tree[i], n_perms = n_perms, leafsize = leafsize,
+                                      maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize)
     )
   }
   return(out)
@@ -151,28 +157,97 @@ StabExp <- function(n_tree, data, reps = 100, n_perms = 1000, leafsize = 5){
 ```
 
 ```{r}
+SimExp <- function(data, n_reps, n_tree, indx = NA, n_perms = 1000, leafsize = 5, maxdepth = NA, maxnodes = NA, nodesize = NA){
+  labs <- data[, "y"] ### extract labels
+  regs <- data[, !names(data) %in% "y"] ### extract predictors
+  res <- matrix(data = NA, nrow = n_reps, ncol = 1) ### initialize output matrix ### initialize output matrix
+ ### assign names to the output matrix
+  
+  for(i in 1:max(indx)){ ### for each folds
+    sub_regs <- regs[indx == i,] ### select regressor subset
+    sub_labs <- labs[indx == i,] ### select label subset
+    res[i, 1] <- randomRF(regs = sub_regs, labs = sub_labs, n_tree = n_tree, n_perms = n_perms, leafsize = leafsize,
+                                      maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize)
+  }
+  return(res)
+}
+```
+
+```{r}
 n_tree <- c(50, 100, 250, 500, 1000)
 LDA20 <- LDASamp(n_samples = 20, p = 2, effect = 25)
-StabLDA20 <- StabExp(n_tree = n_tree, data = LDA20, reps = 100, leafsize = 5)
+StabLDA20 <- StabExp(n_tree = n_tree, data = LDA20, n_reps = 100, leafsize = 5)
 ```
 
 ```{r}
 LDA40 <- LDASamp(n_samples = 40, p = 2, effect = 25)
-StabLDA40 <- StabExp(n_tree = n_tree, data = LDA40, reps = 100, leafsize = 8)
+StabLDA40 <- StabExp(n_tree = n_tree, data = LDA40, n_reps = 100, leafsize = 8)
 ```
 
 ```{r}
 LDA40 <- LDASamp(n_samples = 80, p = 2, effect = 25)
-StabLDA80 <- StabExp(n_tree = n_tree, data = LDA80, reps = 10, leafsize = 16)
+StabLDA80 <- StabExp(n_tree = n_tree, data = LDA80, n_reps = 10, leafsize = 16)
 ```
 
 ```{r}
 CS20 <- CheckerSamp(n = 20, n_clusts = 3)
-StabCS40 <- StabExp(n_tree = n_tree, data = CS20, reps = 100, leafsize = 60)
+StabCS40 <- StabExp(n_tree = n_tree, data = CS20, n_reps = 100, leafsize = 60)
 ```
 
 ```{r}
 CS40 <- CheckerSamp(n = 40, n_clusts = 3)
-StabCS40 <- StabExp(n_tree = n_tree, data = CS40, reps = 100, leafsize = 125)
+StabCS40 <- StabExp(n_tree = n_tree, data = CS40, n_reps = 100, leafsize = 125)
+```
+
+```{r}
+CheckerSim <- function(n_reps, n, n_clusts, n_perms = 1000, leafsize = 5, maxdepth = NA, maxnodes = NA, nodesize = NA){
+  indx_args <- c(length(n) > 1, length(n_clusts) > 1)
+  if(sum(as.numeric(indx_args)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
+  var_name <- c("n", "n_clusts")[indx_args]
+  params <- cbind(n, n_clusts) ### parameter space
+  out <- vector(mode = "list", length = nrow(params))
+  for (i in 1:nrow(params)){
+    sampsize <- params[[i, "n_clusts"]]^2 * params[[i, "n"]]
+    indx <- as.vector(sapply(1:n_reps, function(x, sampsize) rep(x, sampsize), sampsize = sampsize))
+    data <- lapply(1:n_reps, FUN = function(x, n, n_clusts) CheckerSamp(n = n, n_clusts = n_clusts),
+                   n = params[[i, "n"]], n_clusts = params[[i, "n_clusts"]])
+    data <- as_tibble(do.call(rbind, data))
+    tmp <- SimExp(n_reps = n_reps, data = data, indx = indx, n_tree = n_tree, n_perms = n_perms,
+                  leafsize = leafsize, maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize)
+    out[[i]] <- EmpericalPower(tmp)
+  }
+  out <- do.call(rbind, out)
+  if(sum(as.numeric(indx_args)) > 0){
+    out <- data.frame(out, params[, var_name])
+    colnames(out)[ncol(out)] <- var_name
+    out <- pivot_longer(out, !last_col(), names_to = "method", values_to = "RF")
+    out <- ggplot(data = out, aes(x = .data[[var_name]], y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point()
+  }
+  return(out)
+}
+```
+
+```{r}
+LDASim <- function(sampsize, n_reps, effect, p, n_perms = 1000, leafsize = 5, maxdepth = NA, maxnodes = NA, nodesize = NA){
+  indx_args <- c(length(p) > 1, length(effect) > 1, length(sampsize) > 1)
+  if(sum(as.numeric(indx_args)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
+  var_name <- c("p", "effect", "sampsize")[indx_args]
+  params <- cbind(p, effect, sampsize) ### parameter space
+  out <- vector(mode = "list", length = nrow(params))
+  for (i in 1:nrow(params)){
+    data <- as_tibble(LDASamp(n_samples = params[i, "sampsize"] * n_reps, p = params[i, "p"], effect = params[i, "effect"]))
+    tmp <- SimExp(n_reps = n_reps, data = data, indx = indx, n_tree = n_tree, n_perms = n_perms,
+                  leafsize = leafsize, maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize)
+    out[[i]] <- EmpericalPower(tmp)
+  }
+  out <- do.call(rbind, out)
+  if(sum(as.numeric(indx_args)) > 0){
+    out <- data.frame(out, params[, var_name])
+    colnames(out)[ncol(out)] <- var_name
+    out <- pivot_longer(out, !last_col(), names_to = "method", values_to = "RF")
+    out <- ggplot(data = out, aes(x = .data[[var_name]], y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point()
+  }
+  return(out)
+}
 ```
 
