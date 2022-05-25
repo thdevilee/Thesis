@@ -12,6 +12,8 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```{r}
 library(foreach)
 library(tidyverse)
+library(doParallel)
+registerDoParallel(cores = 4)
 source("sampling_funcs.R")
 set.seed(1979418)
 ```
@@ -159,6 +161,8 @@ StabExp <- function(n_tree, data, n_reps = 100, n_perms = 1000, leafsize = 5, ma
 ```
 
 ```{r}
+is.int <- function(x) x%%1 == 0
+
 create_folds <- function(n_folds, labs, balanced = TRUE, force = FALSE){
   if(balanced){
     if (any(order(as.numeric(labs[["y"]])) != seq(1, nrow(labs)))) stop("Data (labels) is not sorted") ### checks if the above requirments are met
@@ -236,7 +240,38 @@ StabCS40 <- StabExp(n_tree = n_tree, data = CS40, n_reps = 100, leafsize = 125)
 ```
 
 ```{r}
-CheckerSim <- function(n_reps, n, n_clusts, n_perms = 1000, n_tree = 250, leafsize = 5, maxdepth = NA, maxnodes = NA, nodesize = NA){
+LDASim <- function(sampsize, n_reps, effect, p, n_perms = 1000, n_tree = 250, leafsize = 1, maxdepth = NA, maxnodes = NA, nodesize = NA){
+  indx_args <- c(length(p) > 1, length(effect) > 1, length(sampsize) > 1, length(n_tree) > 1, length(leafsize) > 1, length(maxdepth) > 1, length(maxnodes) > 1, length(nodesize) > 1)
+  if(sum(as.numeric(indx_args)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
+  var_name <- c("p", "effect", "sampsize", "n_tree", "leafsize", "maxdepth", "maxnodes", "nodesize")[indx_args]
+  params <- cbind(p, effect, sampsize, n_tree, leafsize, maxdepth, maxnodes, nodesize) ### parameter space
+  out <- vector(mode = "list", length = nrow(params))
+  for (i in 1:nrow(params)){
+    data <- as_tibble(LDASamp(n_samples = params[i, "sampsize"] * n_reps, p = params[i, "p"], effect = params[i, "effect"]))
+    tmp <- SimExp(n_reps = n_reps, data = data, indx = NA, n_tree = params[[i, "n_tree"]], n_perms = n_perms,
+                  leafsize = params[[i, "leafsize"]], maxdepth = params[[i, "maxdepth"]],
+                  maxnodes = params[[i, "maxnodes"]], nodesize = params[[i, "nodesize"]])
+    out[[i]] <- EmpericalPower(tmp)
+  }
+  out <- do.call(rbind, out)
+  if(sum(as.numeric(indx_args)) > 0){
+    out <- data.frame(out, params[, var_name])
+    colnames(out)[ncol(out)] <- var_name
+    out <- pivot_longer(out, !last_col(), names_to = "method", values_to = "RF")
+    out <- ggplot(data = out, aes(x = .data[[var_name]], y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point()
+  }
+  return(out)
+}
+```
+
+```{r}
+set.seed(1979418)
+LDAs_depth <- LDASim(sampsize = 40, n_reps = 100, effect = 25, p = 2, maxdepth  = c(1, 2, 5, 10, 20, 40))
+```
+
+
+```{r}
+CheckerSim <- function(n_reps, n, n_clusts, n_perms = 1000, n_tree = 250, leafsize = 1, maxdepth = NA, maxnodes = NA, nodesize = NA){
   indx_args <- c(length(n) > 1, length(n_clusts) > 1, length(n_tree) > 1, length(leafsize) > 1, length(maxdepth) > 1, length(maxnodes) > 1, length(nodesize) > 1)
   if(sum(as.numeric(indx_args)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
   var_name <- c("n", "n_clusts", "n_tree", "leafsize", "maxdepth", "maxnodes", "nodesize")[indx_args]
@@ -266,27 +301,7 @@ CheckerSim <- function(n_reps, n, n_clusts, n_perms = 1000, n_tree = 250, leafsi
 ```
 
 ```{r}
-LDASim <- function(sampsize, n_reps, effect, p, n_perms = 1000, n_tree = 250, leafsize = 5, maxdepth = NA, maxnodes = NA, nodesize = NA){
-  indx_args <- c(length(p) > 1, length(effect) > 1, length(sampsize) > 1, length(n_tree) > 1, length(leafsize) > 1, length(maxdepth) > 1, length(maxnodes) > 1, length(nodesize) > 1)
-  if(sum(as.numeric(indx_args)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
-  var_name <- c("p", "effect", "sampsize", "n_tree", "leafsize", "maxdepth", "maxnodes", "nodesize")[indx_args]
-  params <- cbind(p, effect, sampsize, n_tree, leafsize, maxdepth, maxnodes, nodesize) ### parameter space
-  out <- vector(mode = "list", length = nrow(params))
-  for (i in 1:nrow(params)){
-    data <- as_tibble(LDASamp(n_samples = params[i, "sampsize"] * n_reps, p = params[i, "p"], effect = params[i, "effect"]))
-    tmp <- SimExp(n_reps = n_reps, data = data, indx = NA, n_tree = params[[i, "n_tree"]], n_perms = n_perms,
-                  leafsize = params[[i, "leafsize"]], maxdepth = params[[i, "maxdepth"]],
-                  maxnodes = params[[i, "maxnodes"]], nodesize = params[[i, "nodesize"]])
-    out[[i]] <- EmpericalPower(tmp)
-  }
-  out <- do.call(rbind, out)
-  if(sum(as.numeric(indx_args)) > 0){
-    out <- data.frame(out, params[, var_name])
-    colnames(out)[ncol(out)] <- var_name
-    out <- pivot_longer(out, !last_col(), names_to = "method", values_to = "RF")
-    out <- ggplot(data = out, aes(x = .data[[var_name]], y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point()
-  }
-  return(out)
-}
+set.seed(1979418)
+CS_depth <- CheckerSim(n = 20, n_clusts = 3, n_reps = 100, maxdepth = c(1, 2, 5, 10, 20, 40, 80, 180))
 ```
 
