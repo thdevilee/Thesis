@@ -15,6 +15,7 @@ library(tidyverse)
 library(doParallel)
 registerDoParallel(cores = 4)
 source("sampling_funcs.R")
+load("wsRFSynthData.RData")
 set.seed(1979418)
 ```
 
