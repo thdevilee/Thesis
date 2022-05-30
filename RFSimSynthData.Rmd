@@ -20,8 +20,6 @@ set.seed(1979418)
 
 
 ```{r}
-tmp <- matrix(rnorm(200), nrow = 20, ncol = 10)
-
 randomsplit <- function(regs, indx, spltb_reg, nodesize, leafsize = 1){
   unq_indx <- names(spltb_reg)
   splt_indx <- rep(NA, nrow(regs))
@@ -73,7 +71,6 @@ regsplits <- function(regs, indx, leafsize){
   }
   return(out)
 }
-regsplits(tmp, rep(c("1", "2"), 10), leafsize = 1)
 
 gensplits <- function(regs, maxdepth = NA, maxnodes = NA, nodesize = NA, leafsize = 1){
   if (is.na(maxnodes)) maxnodes <- nrow(regs)
@@ -200,7 +197,7 @@ SimExp <- function(data, n_reps, n_tree, indx = NA, n_perms = 1000, leafsize = 5
 
 pltmedquant <- function(data, nms = NA){
   if(is.na(nms)) nms <- 1:length(data)
-  data_wide <- as.data.frame(do.call(rbind, StabLDA20))
+  data_wide <- as.data.frame(do.call(rbind, data))
   colnames(data_wide) <- 1:ncol(data_wide)
   data_wide <- cbind(data_wide, n_tree = nms)
   data_long <- pivot_longer(data_wide, !last_col(), names_to = "reps", values_to = "p_value")
