@@ -13,6 +13,8 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 library(foreach)
 library(tidyverse)
 library(doParallel)
+library(randomForest)
+library(globaltest)
 registerDoParallel(cores = 4)
 source("sampling_funcs.R")
 load("wsRFSynthData.RData")
@@ -118,12 +120,14 @@ gentrees <- function(regs, n_tree, maxdepth = NA, maxnodes = NA, nodesize = NA, 
 }
 
 S <- function(X, y){
-  num <- sum((t(y) %*% X)^2)
-  denom <- t(y)  %*% y
-  return(drop(num/denom))
+  Z <- matrix(1, nrow = nrow(X))
+  X <- X - Z %*% solve(crossprod(Z), crossprod(Z, X))
+  tmp <- crossprod(X, y)^2
+  out <- apply(tmp, 2, sum)
+  return(drop(out))
 }
 
-
+### check
 randomRF <- function(regs, labs, n_tree, n_perms, maxdepth = NA, maxnodes = NA, nodesize = NA, leafsize = 1){
   y <- as.matrix(labs)
   pckgs <- as.vector(lsf.str(.GlobalEnv))
@@ -137,13 +141,39 @@ randomRF <- function(regs, labs, n_tree, n_perms, maxdepth = NA, maxnodes = NA, 
   return(1 - mean(stat > permed_stat))
 }
 
+  
+
+StabExp <- function(n_tree, data, n_reps = 100, n_perms = 1000, leafsize = 5, maxdepth = NA, maxnodes = NA, nodesize = NA){
+  pckgs <- as.vector(lsf.str(.GlobalEnv))
+  labs <- data[, "y", drop = FALSE] ### extract labels
+  regs <- data[, !names(data) %in% "y"] ### extract predictors
+  y <- matrix(residuals(lm(y ~ 1, data = labs)), nrow = nrow(labs))
+  
+  out <- 
+    foreach(i = 1:n_reps, .combine = "rbind", .packages = "foreach", .export = pckgs) %dopar% {
+      y_perm <- sapply(1:(n_perms - 1), function(x, y) y[sample(nrow(y)), ,drop = FALSE], y = y)
+      foreach (j = 1:length(n_tree), .combine = "c", .export = pckgs) %dopar% {
+        X <- gentrees(regs = regs, n_tree = n_tree[j], leafsize = leafsize, maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize)
+        S_t <- S(X, y)
+        S_p <- c(Inf, S(X, y_perm))
+        mean(S_t*(1-1e-14) <= S_p)
+      }
+    }
+  out <- data.frame(out, row.names = NULL)
+  colnames(out) <- n_tree
+  return(out)
+}
+
+
 EmpericalPower <- function(data){
   out <- apply(data, 2, function(x) mean(x < 0.05))
   return(out)
 }
+
 ```
 
 ```{r}
+### old
 StabExp <- function(n_tree, data, n_reps = 100, n_perms = 1000, leafsize = 5, maxdepth = NA, maxnodes = NA, nodesize = NA){
   labs <- data[, "y"] ### extract labels
   regs <- data[, !names(data) %in% "y"] ### extract predictors
@@ -209,6 +239,27 @@ pltmedquant <- function(data, nms = NA){
                   fun = median) + ylab("log10 p-value") + xlab("Number of trees")
   return(out)
 }
+
+
+powerplot <- function(..., x_names = NA, sampsize = NA, alpha = 0.05){
+  data <- list(...)
+  if(all(is.na(x_names))) x_names <- 1:length(data)
+  if(all(is.na(sampsize))) sampsize <- NULL
+  data_long <- vector(mode = "list", length = length(data))
+  for (i in 1:length(data)){
+    tmp <- lapply(data[[i]], function(x, alpha) mean(x < alpha), alpha = alpha)
+    data_long[[i]] <- cbind(i, unlist(tmp), x_names)
+  }
+  data_long <- do.call(rbind.data.frame, data_long)
+  colnames(data_long) <- c("exp", "power", "n_tree")
+  out <- ggplot(data = data_long, aes(x = n_tree, y = power, colour = factor(exp))) + geom_line(linetype = "dashed") + geom_point() + 
+    ylim(c(0, 1)) + xlab("Number of trees") + ylab("Power") + scale_color_discrete(name = "Sample size", labels = sampsize)
+  return(out)
+}
+
+powerplot(StabCS20, StabCS40, x_names = n_tree, sampsize = c(20, 40))
+
+powerplot(StabLDA20, StabLDA40, StabLDA80, x_names = n_tree, sampsize = c(20, 40, 80))
 ```
 
 ```{r}
@@ -301,5 +352,177 @@ CheckerSim <- function(n_reps, n, n_clusts, n_perms = 1000, n_tree = 250, leafsi
 ```{r}
 set.seed(1979418)
 CS_depth <- CheckerSim(n = 20, n_clusts = 3, n_reps = 100, maxdepth = c(1, 2, 5, 10, 20, 40, 80, 180))
+```
+
+
+
+```{r}
+X <- matrix(rnorm(30), 15, 2)
+y <- sample(c(0, 1), size = 15, replace = TRUE)
+tmp <- data.frame(X = X, y = y)
+colnames(tmp) <- c("X1", "X2", "y")
+set.seed(1)
+gt(y ~ 1, y ~ ., data = tmp, permutations = 1000)
+
+S <- function(X, y){
+  data <- data.frame(X)
+  Z <- model.matrix(y ~ 1, data = data)
+  X <- model.matrix(y ~ 0 + ., data = data)
+  X <- X - Z %*% solve(crossprod(Z), crossprod(Z, X))
+  y <- residuals(lm(y ~ 1, data = data))
+  tmp <- crossprod(X, y)^2
+  out <- apply(tmp, 2, sum)
+  return(drop(out))
+}
+
+S_t <- S(X, y)
+set.seed(1)
+S_p <- c(Inf, replicate(999, S(X, sample(y))))
+mean(S_t*(1-1e-14) <= S_p)
+
+```
+
+```{r}
+nestedcv.rf <- function(folds, regs, labs, mtry = c("p", "p/3", "sqrt(p)"), nodesize = c(5, 1), n_tree = c(100, 250, 500)){
+  p <- ncol(regs)
+  mtry <- sapply(mtry, function(x, p) eval(parse(text = x)), p = p)
+  mtry <- unique(round(mtry))
+  if (length(mtry > 2)) mtry <- mtry[-1]
+  grid_params <- expand.grid(mtry = sapply(mtry, function(x, p) eval(parse(text = x)), p = p),
+                            nodesize = nodesize,
+                            ntree = n_tree)
+
+  n_folds <- max(folds) ### total number of folds
+  res_outer <- numeric(n_folds) ### initialize outerloop output
+  fold_id <- seq(1, n_folds) ### create fold numbers for innerloop
+  for(i in 1:n_folds){  ### for all folds
+    res_inner <- matrix(NA, nrow = n_folds - 1, ncol = nrow(grid_params)) ### initialize innerloop output matrix
+    for(j in 1:(n_folds - 1)){ ### for all folds - 1 (excluding one outer validations set)
+      for(k in 1:nrow(grid_params)){ ### for every neighbour
+        indx <- fold_id[fold_id != i]  ### exclude outer validation set
+        tmp <- randomForest::randomForest(x = regs[(folds %in% indx[-j]),],  y = labs[(folds %in% indx[-j]), ],
+                                          xtest = regs[(folds == indx[j]),], ytest = labs[folds == indx[j], ],
+                                          mtry = grid_params[[k, "mtry"]], nodesize = grid_params[[k, "nodesize"]],
+                                          ntree = grid_params[[k, "ntree"]]) ### train on n_folds - 2
+        res_inner[j, k] <- mean(tmp[["test"]][["predicted"]] != labs[folds == indx[j], ]) ### validate on innerloop validation set
+      }
+    }
+    res_inner <- apply(res_inner, MARGIN = 2, mean) ### compute average misclassification rate over the innerloop folds
+    opt_params <- grid_params[which.min(res_inner), ]
+    preds <- randomForest::randomForest(x = regs[folds != i,],  y = labs[folds != i, ],
+                                        xtest = regs[folds == i,], ytest = labs[folds == i, ],
+                                        mtry = opt_params[["mtry"]], nodesize = opt_params[["nodesize"]],
+                                        ntree = opt_params [["ntree"]])[["test"]][["predicted"]]
+    res_outer[i] <- mean(as.numeric(preds >= 0.5) == labs[folds == i, ])  ### compute average accuracy on outer validation set
+  }
+  return(mean(res_outer))
+}
+nestedcv.rf(folds, regs, labs[sample(nrow(labs)), , drop = FALSE])
+```
+
+```{r}
+### function to compute perform nested ridge
+nestedcv.ridge <- function(folds, regs, labs){
+  regs <- apply(regs, 2, as.numeric) ### makes sure all columns are numeric
+  n_folds <- max(folds) ### number of folds
+  res_outer <- numeric(n_folds) ### initialize output 
+  for(i in 1:n_folds){ 
+    log_indx <- folds != i ### create logical index for subset of the data
+    regs_sub <- as.matrix(regs[log_indx, ]) ### select regressor and put in right format
+    labs_sub <- labs[log_indx, , drop = TRUE] ### select labels
+    folds_sub <- rename_folds(folds[log_indx]) ### rename folds to 1, ... k - 1 (required for cv.glment)
+    res_cv <- glmnet::cv.glmnet(x = regs_sub, y = labs_sub, type.measure = "mse", foldid = folds_sub, alpha = 0) ### compute optimal lambda
+    preds <- predict(res_cv, as.matrix(regs[folds == i,]), s = "lambda.min") >= 0.5 ### make predictions for the validation set from a model with the optimal lambda
+    res_outer[i] <- mean(preds == labs[folds == i, , drop = TRUE]) ### compute average accuracy on outer validation set
+  }
+  return(mean(res_outer))
+}
+### function to compute linear global test
+linear.gt <- function(regs, labs){
+  res <- gt(y~1, y~., data = data.frame(regs, y = labs)) ### linear global test
+  return(res@result[1])  ### return p-value
+}
+```
+
+
+```{r}
+SimExp <- function(data, n_reps, pckgs, indx = NA, n_perms = 100, ...){
+  labs <- data[, "y"] ### extract labels
+  regs <- data[, !names(data) %in% "y"] ### extract predictors
+  if(all(is.na(indx))){ ### if no index specified
+    indx <- create_folds(n_folds = n_reps, labs = labs, ...) ### compute folds equal to the number of replications
+  }
+  res <- matrix(data = NA, nrow = n_reps, ncol = 8) ### initialize output matrix
+  colnames(res) <- c("linear.gt", "nestedcv.ridge", "nestedcv.rf", "rf.gt") ### assign names to the output matrix
+  
+  for(i in 1:max(indx)){ ### for each folds
+    sub_regs <- regs[indx == i,] ### select regressor subset
+    sub_labs <- labs[indx == i,] ### select label subset
+    folds <- create_folds(n_folds = 5, labs = sub_labs, ...) ### create folds for functions that require cross validation
+    res[i, 1] <- linear.gt(regs = sub_regs, labs = sub_labs) ### compute p-value of the linear global test
+    ridge_stat <- nestedcv.ridge(folds = folds, regs = sub_regs, labs = sub_labs) ### compute test statistic for the nested ridge
+    rfcv_stat <- nestedcv.rf(folds = folds, regs = sub_regs, labs = sub_labs) ### compute test statistic for the nested knn
+    rf_X <- gentrees()
+    rfgt_stat <- 
+    
+    perm_mat <- foreach(j = 1:n_perms, .combine = "cbind", .export = pckgs) %dopar% { ### for n_perms replications
+      perm_indx <- sample(nrow(sub_labs)) ### permutation index
+      perm_regs <- sub_regs[perm_indx, ] ### permute regressors
+      perm_folds <- create_folds(n_folds = 5, labs = sub_labs, ...) ### compute folds
+      perm_ridge <- nestedcv.ridge(folds = perm_folds, regs = perm_regs, labs = sub_labs) ### compute (permuted) test statistic for the nested ridge
+      perm_rfcv <- nestedcv.rf(folds = perm_folds, regs = perm_regs, labs = sub_labs) ### compute (permuted) test statistic for the nested knn
+      perm_rfgt
+      matrix(c(perm_ridge, perm_rf), nrow = 2) ### return permuted test statistics for both tests
+    }
+    res[i, 2] <- mean(ridge_stat*(1-1e-14) <= c(Inf, perm_mat[1, , drop = TRUE])) ### compute emperical p-value for nested ridge
+    res[i, 3] <- mean(rfcv_stat*(1-1e-14) <= c(Inf, perm_mat[2, , drop = TRUE])) ### compute emperical p-value for nested knn
+  }
+  return(res)
+}
+```
+
+
+```{r}
+library(tree)
+tmp <- tree(y ~ x1 + x2 ,data = LDA20, mincut = 1, minsize = 2)
+plot(tmp)
+text(tmp)
+
+nestedcv.tree <- function(folds, regs, labs, leafsize = c(5, 1), split = c("deviance", "gini")){
+  grid_params <- expand.grid(mincut = leafsize,
+                            split = split)
+  n_folds <- max(folds) ### total number of folds
+  res_outer <- numeric(n_folds) ### initialize outerloop output
+  fold_id <- seq(1, n_folds) ### create fold numbers for innerloop
+  for(i in 1:n_folds){  ### for all folds
+    res_inner <- matrix(NA, nrow = n_folds - 1, ncol = nrow(grid_params)) ### initialize innerloop output matrix
+    for(j in 1:(n_folds - 1)){ ### for all folds - 1 (excluding one outer validations set)
+      for(k in 1:nrow(grid_params)){ ### for every neighbour
+        indx <- fold_id[fold_id != i]  ### exclude outer validation set
+        tmp <- tree::tree(y ~ ., data = cbind.data.frame(labs[(folds %in% indx[-j]), , drop = FALSE], regs[(folds %in% indx[-j]),]), 
+                          mincut = grid_params[[k, "mincut"]], minsize = 2*grid_params[[k, "mincut"]],
+                          split = as.character(grid_params[[k, "split"]])) ### train on n_folds - 2
+        
+        res_inner[j, k] <- mean(predict(tmp, regs[(folds %in% indx[j]),]) != labs[folds == indx[j], ]) ### validate on innerloop validation set
+      }
+    }
+    res_inner <- apply(res_inner, MARGIN = 2, mean) ### compute average misclassification rate over the innerloop folds
+    opt_params <- grid_params[which.min(res_inner), ]
+    model <- tree::tree(y ~ ., data = cbind.data.frame(labs[folds != i, , drop = FALSE], regs[folds != i,] ),
+                        mincut = opt_params[["mincut"]], minsize = 2*opt_params[["mincut"]],
+                        split = as.character(opt_params[["split"]]))
+    preds <- predict(model, regs[folds == i,])
+    res_outer[i] <- mean(preds == labs[folds == i, ])  ### compute average accuracy on outer validation set
+  }
+  return(mean(res_outer))
+}
+nestedcv.tree(folds, regs, labs)
+```
+
+
+```{r}
+labs <- LDA20[, "y", drop = FALSE]
+regs <- LDA20[,  !colnames(LDA40) %in% "y"]
+folds <- create_folds(n_folds = 5, labs, balanced = TRUE, force = FALSE)
 ```
 
