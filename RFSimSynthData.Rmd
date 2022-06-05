@@ -13,11 +13,11 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 library(foreach)
 library(tidyverse)
 library(doParallel)
-library(randomForest)
+#library(randomForest)
 library(globaltest)
 registerDoParallel(cores = 4)
 source("sampling_funcs.R")
-load("wsRFSynthData.RData")
+#load("wsRFSynthData.RData")
 set.seed(1979418)
 ```
 
@@ -244,6 +244,25 @@ powerplot <- function(..., x_names = NA, sampsize = NA, alpha = 0.05){
     tmp <- lapply(data[[i]], function(x, alpha) mean(x < alpha), alpha = alpha)
     data_long[[i]] <- cbind(i, unlist(tmp), x_names)
   }
+  return(data_long)
+  data_long <- do.call(rbind.data.frame, data_long)
+  colnames(data_long) <- c("exp", "power", "n_tree")
+  out <- ggplot(data = data_long, aes(x = n_tree, y = power, colour = factor(exp))) + geom_line(linetype = "dashed") + geom_point() + 
+    ylim(c(0, 1)) + xlab("Number of trees") + ylab("Power") + scale_color_discrete(name = "Sample size", labels = sampsize)
+  return(out)
+}
+
+
+### updated function
+powerplot <- function(..., x_names = NA, sampsize = NA, alpha = 0.05){
+  data <- list(...)
+  if(all(is.na(x_names))) x_names <- 1:length(data)
+  if(all(is.na(sampsize))) sampsize <- NULL
+  data_long <- vector(mode = "list", length = length(data))
+  for (i in 1:length(data)){
+    tmp <- apply(data[[i]], 2,  function(x, alpha) mean(x < alpha), alpha = alpha)
+    data_long[[i]] <- cbind(i, unlist(tmp), x_names)
+  }
   data_long <- do.call(rbind.data.frame, data_long)
   colnames(data_long) <- c("exp", "power", "n_tree")
   out <- ggplot(data = data_long, aes(x = n_tree, y = power, colour = factor(exp))) + geom_line(linetype = "dashed") + geom_point() + 
@@ -260,27 +279,32 @@ powerplot(StabLDA20, StabLDA40, StabLDA80, x_names = n_tree, sampsize = c(20, 40
 ```{r}
 n_tree <- c(50, 100, 250, 500, 1000)
 LDA20 <- LDASamp(n_samples = 20, p = 2, effect = 25)
-StabLDA20 <- StabExp(n_tree = n_tree, data = LDA20, n_reps = 100, leafsize = 5)
+StabLDA20 <- StabExp(n_tree = n_tree, data = LDA20, n_reps = 100, leafsize = 3)
 ```
 
 ```{r}
 LDA40 <- LDASamp(n_samples = 40, p = 2, effect = 25)
-StabLDA40 <- StabExp(n_tree = n_tree, data = LDA40, n_reps = 100, leafsize = 8)
+StabLDA40 <- StabExp(n_tree = n_tree, data = LDA40, n_reps = 100, leafsize = 3)
 ```
 
 ```{r}
-LDA40 <- LDASamp(n_samples = 80, p = 2, effect = 25)
-StabLDA80 <- StabExp(n_tree = n_tree, data = LDA80, n_reps = 10, leafsize = 16)
+LDA80 <- LDASamp(n_samples = 80, p = 2, effect = 25)
+StabLDA80 <- StabExp(n_tree = n_tree, data = LDA80, n_reps = 10, leafsize = 3)
 ```
 
 ```{r}
-CS20 <- CheckerSamp(n = 20, n_clusts = 3)
-StabCS40 <- StabExp(n_tree = n_tree, data = CS20, n_reps = 100, leafsize = 60)
+CS3 <- CheckerSamp(n = 3, n_clusts = 3)
+StabCS3 <- StabExp(n_tree = n_tree, data = CS3, n_reps = 100, leafsize = 2)
 ```
 
 ```{r}
-CS40 <- CheckerSamp(n = 40, n_clusts = 3)
-StabCS40 <- StabExp(n_tree = n_tree, data = CS40, n_reps = 100, leafsize = 125)
+CS6 <- CheckerSamp(n = 6, n_clusts = 3)
+StabCS6 <- StabExp(n_tree = n_tree, data = CS6, n_reps = 100, leafsize = 2)
+```
+
+```{r}
+CS12 <- CheckerSamp(n = 12, n_clusts = 3)
+StabCS12 <- StabExp(n_tree = n_tree, data = CS6, n_reps = 100, leafsize = 2)
 ```
 
 ```{r}
