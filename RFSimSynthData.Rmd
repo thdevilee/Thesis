@@ -164,10 +164,8 @@ StabExp <- function(n_tree, data, n_reps = 100, n_perms = 1000, leafsize = 5, ma
     foreach(i = 1:n_reps, .combine = "rbind", .packages = "foreach", .export = pckgs) %dopar% {
       y_perm <- sapply(1:(n_perms - 1), function(x, y) y[sample(nrow(y)), ,drop = FALSE], y = y)
       foreach (j = 1:length(n_tree), .combine = "c", .export = pckgs) %do% {
-        X <- gentrees(regs = regs, n_tree = n_tree[j], leafsize = leafsize, maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize)
-        S_t <- S(X, y)
-        S_p <- c(Inf, S(X, y_perm))
-        mean(S_t*(1-1e-14) <= S_p)
+        randomRF(regs = regs, y = y, y_perm = y_perm, n_tree = n_tree[j], leafsize = leafsize, maxdepth = maxdepth,
+                 maxnodes = maxnodes, nodesize = nodesize)
       }
     }
   out <- data.frame(out, row.names = NULL)
@@ -252,6 +250,7 @@ powerplot <- function(..., x_names = NA, sampsize = NA, alpha = 0.05){
     ylim(c(0, 1)) + xlab("Number of trees") + ylab("Power") + scale_color_discrete(name = "Sample size", labels = sampsize)
   return(out)
 }
+
 
 powerplot(StabCS20, StabCS40, x_names = n_tree, sampsize = c(20, 40))
 
