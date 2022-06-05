@@ -246,7 +246,7 @@ pval.knn_gt <- function(regs, labs, balanced = TRUE, force = FALSE){
     P <- ifelse(ord_mat > (n_train - neighbours[j]), 1, 0) ### compute partition matrix and save in list
     p_vals[j] <- log(globaltest::gt(y ~ 1, y ~ ., data = cbind(P, labs[folds != i, ]))@result[1]) ### compute gt statistic based on partition matrix
     }
-    optimal_k <- which.min(p_vals) ### select k which corresponds to smallest p-value
+    optimal_k <- neighbours[which.min(p_vals)] ### select k which corresponds to smallest p-value
     n_test <- sum(folds == i) ### compute number of observations in validation set
     dist_mat <- comp_dist(regs[folds == i, ]) ### compute distance matrix
     ord_mat <- knn_mat(dist_mat) ### compute ordering mat
