@@ -13,11 +13,11 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 library(foreach)
 library(tidyverse)
 library(doParallel)
-#library(randomForest)
+library(randomForest)
 library(globaltest)
 registerDoParallel(cores = 4)
 source("sampling_funcs.R")
-#load("wsRFSynthData.RData")
+load("wsRFSynthData_1.RData")
 set.seed(1979418)
 ```
 
@@ -179,6 +179,14 @@ EmpericalPower <- function(data){
   return(out)
 }
 
+rename_folds <- function(folds){
+  digits <- sort(unique(folds)) ### sort all unique fold ids
+  for (i in 1:length(digits)){ ### for each element in unique sorted folds
+    folds[folds == digits[i]] <- i ### rename to 1, .., k (k = length(unique sorted folds))
+  }
+  return(folds) 
+}
+
 ```
 
 
@@ -203,7 +211,7 @@ create_folds <- function(n_folds, labs, balanced = TRUE, force = FALSE, ...){
 }
 
 SimExp <- function(data, n_reps, n_tree, indx = NA, n_perms = 1000, leafsize = 5, maxdepth = NA, maxnodes = NA, nodesize = NA){
-  labs <- data[, "y"] ### extract labels
+  labs <- data[, "y", drop = FALSE] ### extract labels
   regs <- data[, !names(data) %in% "y"] ### extract predictors
   res <- matrix(data = NA, nrow = n_reps, ncol = 1) ### initialize output matrix ### initialize output matrix
  ### assign names to the output matrix
@@ -271,7 +279,7 @@ powerplot <- function(..., x_names = NA, sampsize = NA, alpha = 0.05){
 }
 
 
-powerplot(StabCS20, StabCS40, x_names = n_tree, sampsize = c(20, 40))
+powerplot(StabCS3, StabCS6, x_names = n_tree, sampsize = c(20, 40))
 
 powerplot(StabLDA20, StabLDA40, StabLDA80, x_names = n_tree, sampsize = c(20, 40, 80))
 ```
@@ -304,7 +312,7 @@ StabCS6 <- StabExp(n_tree = n_tree, data = CS6, n_reps = 100, leafsize = 2)
 
 ```{r}
 CS12 <- CheckerSamp(n = 12, n_clusts = 3)
-StabCS12 <- StabExp(n_tree = n_tree, data = CS6, n_reps = 100, leafsize = 2)
+StabCS12 <- StabExp(n_tree = n_tree, data = CS12, n_reps = 100, leafsize = 2)
 ```
 
 ```{r}
