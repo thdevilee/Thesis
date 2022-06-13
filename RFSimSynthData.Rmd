@@ -253,12 +253,12 @@ PowerExp <- function(mthd = "LDA", n_reps = 100, n_perms = 1000, n_tree = 250, l
 
 ```{r}
 set.seed(1979418)
-LDAs_depth <- PowerExp(mthd = "LDA", sampsize = 40, effect = 25, p = 2, n_reps = 100, maxdepth  = c(1, 2, 5, 10, 20, 40))
+LDAs_depth <- PowerExp(mthd = "LDA", sampsize = 40, effect = 25, p = 2, n_reps = 100, maxdepth  = c(seq(1, 10), 15, 10, 20, 40))
 ```
 
 ```{r}
 set.seed(1979418)
-CS_depth <- PowerExp(mthd = "CS", n_obs_clusts = 20, n_clusts = 3, n_reps = 100, maxdepth = c(1, 2, 5, 10, 20, 40, 80, 180))
+CS_depth <- PowerExp(mthd = "CS", n_obs_clusts = 20, n_clusts = 3, n_reps = 100, maxdepth = c(seq(1, 10), 15, 20, 40, 80, 180))
 ```
 
 ### Simulation experiment
