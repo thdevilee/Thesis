@@ -116,6 +116,7 @@ gentrees <- function(regs, n_tree, maxdepth = NA, maxnodes = NA, nodesize = NA, 
     splts <- gensplits(regs = regs, maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize, leafsize = leafsize)
     sapply(splts, FUN = function(x) as.numeric(substr(x, nchar(x), nchar(x)) == 2))
   }
+  out <- as.matrix(out)
   rownames(out) <- NULL
   colnames(out) <- 1:n_tree
   return(out)
@@ -327,7 +328,7 @@ nestedcv.rf <- function(folds, regs, labs, mtry = c("p", "p/3", "sqrt(p)"), node
 ```
 
 ```{r}
-pval.rf_gt <- function(regs, labs, maxdepth = NA, n_perms = 1000, n_tree = 500, balanced = TRUE, force = FALSE, leafsize = 1, maxnodes = NA, nodesize = NA){
+pval.rf_gt <- function(regs, labs, maxdepth = NA, n_perms = 1000, n_tree = 250, balanced = TRUE, force = FALSE, leafsize = 1, maxnodes = NA, nodesize = NA){
   i <- 1 ### arbitrarily choose a validation fold
   folds <- create_folds(n_folds = 2, labs = labs, balanced = balanced, force = force) ### create folds such that the groups are balanced
   indx_train <- folds != i
@@ -352,6 +353,23 @@ pval.rf_gt <- function(regs, labs, maxdepth = NA, n_perms = 1000, n_tree = 500, 
 }
 ```
 
+```{r}
+overall.Sgt <- function(regs, labs, n_tree = 250, maxdepth = NA, n_perms = 1000, leafsize = 1, maxnodes = NA, nodesize = NA){
+  pckgs <- as.vector(lsf.str(.GlobalEnv))
+  n <- nrow(regs)
+  y <- matrix(as.numeric(labs[["y"]]))
+  y_perm <- sapply(1:(n_perms - 1), function(x, y) y[sample(nrow(y)), ,drop = FALSE], y = y)
+  X <- gentrees(regs = regs, n_tree = 1, leafsize = leafsize, maxdepth = ceiling(runif(1, min = 0, max = n - 1)), maxnodes = maxnodes, nodesize = nodesize)
+  for(i in 1:(n_tree-1)){
+    X <- cbind(X, gentrees(regs = regs, n_tree = 1, leafsize = leafsize, maxdepth = ceiling(runif(1, min = 0, max = n - 1)), maxnodes = maxnodes, nodesize = nodesize))
+  }
+  S_t <- S(X, y)
+  S_p <- c(Inf, S(X, y_perm))
+  out <- mean(S_t*(1-1e-14) <= S_p)
+  return(out)
+}
+```
+
 
 ```{r}
 SimExp <- function(data, n_reps, indx = NA, n_perms = 100, ...){
@@ -361,8 +379,8 @@ SimExp <- function(data, n_reps, indx = NA, n_perms = 100, ...){
   if(all(is.na(indx))){ ### if no index specified
     indx <- create_folds(n_folds = n_reps, labs = labs, ...) ### compute folds equal to the number of replications
   }
-  res <- matrix(data = NA, nrow = n_reps, ncol = 4) ### initialize output matrix
-  colnames(res) <- c("linear.gt", "nestedcv.ridge", "nestedcv.rf", "pval.rf_gt") ### assign names to the output matrix
+  res <- matrix(data = NA, nrow = n_reps, ncol = 5) ### initialize output matrix
+  colnames(res) <- c("linear.gt", "nestedcv.ridge", "nestedcv.rf", "pval.rf_gt", "overall.Sgt") ### assign names to the output matrix
   
   for(i in 1:max(indx)){ ### for each folds
     sub_regs <- regs[indx == i,] ### select regressor subset
@@ -372,6 +390,7 @@ SimExp <- function(data, n_reps, indx = NA, n_perms = 100, ...){
     ridge_stat <- nestedcv.ridge(folds = folds, regs = sub_regs, labs = sub_labs) ### compute test statistic for the nested ridge
     rf_stat <- nestedcv.rf(folds = folds, regs = sub_regs, labs = sub_labs) ### compute test statistic for the nested knn
     res[i, 4] <- pval.rf_gt(regs = sub_regs, labs = sub_labs, ...)
+    res[i, 5] <- overall.Sgt(regs = sub_regs, labs = sub_labs)
     
     perm_mat <- foreach(j = 1:(n_perms-1), .combine = "cbind", .export = pckgs) %dopar% { ### for n_perms replications
       perm_indx <- sample(nrow(sub_labs)) ### permutation index
@@ -591,7 +610,7 @@ nestedcv.tree(folds, regs, labs)
 
 ```{r}
 labs <- LDA20[, "y", drop = FALSE]
-regs <- LDA20[,  !colnames(LDA40) %in% "y"]
+regs <- LDA20[,  !colnames(LDA20) %in% "y"]
 folds <- create_folds(n_folds = 5, labs, balanced = TRUE, force = FALSE)
 ```
 
