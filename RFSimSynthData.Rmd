@@ -18,7 +18,7 @@ library(globaltest)
 registerDoParallel(cores = 4)
 source("sampling_funcs.R")
 source("aux_funcs.R")
-load("wsRFSynthData_1.RData")
+load("wsRFSynthData.RData")
 set.seed(1979418)
 ```
 
@@ -163,11 +163,21 @@ StabExp <- function(n_tree, data, n_reps = 100, n_perms = 1000, leafsize = 5, ma
 }
 ```
 
+```{r}
+tmp <- replicate(1000, expr = {
+LDA20 <- LDASamp(n_samples = 20, p = 2, effect = 3.75)
+gt(y ~ 1, y ~ ., data = LDA20)@result[1]})
+mean(tmp <= 0.05)
+```
+
+
 
 ```{r}
-n_tree <- c(50, 100, 250, 500, 1000)
-LDA20 <- LDASamp(n_samples = 20, p = 2, effect = 25)
-StabLDA20 <- StabExp(n_tree = n_tree, data = LDA20, n_reps = 100, leafsize = 3)
+n_tree <- c(50, 100, 250, 500, 1000, 2500, 5000, 10000)
+set.seed(1979418)
+LDAdata <- LDASamp(n_samples = 20, p = 2, effect = 3.4)
+StabLDA <- StabExp(n_tree = n_tree, data = LDAdata, n_reps = 100, leafsize = 3)
+EmpericalPower(StabLDA)
 ```
 
 ```{r}
@@ -178,6 +188,13 @@ StabLDA40 <- StabExp(n_tree = n_tree, data = LDA40, n_reps = 100, leafsize = 3)
 ```{r}
 LDA80 <- LDASamp(n_samples = 80, p = 2, effect = 25)
 StabLDA80 <- StabExp(n_tree = n_tree, data = LDA80, n_reps = 10, leafsize = 3)
+```
+
+```{r}
+set.seed(1979418)
+CSdata <- CheckerSamp(n = 3, n_clusts = 3)
+StabCS <- StabExp(n_tree = n_tree, data = CSdata, n_reps = 100, leafsize = 3)
+EmpericalPower(StabCS)
 ```
 
 ```{r}
@@ -213,7 +230,7 @@ powerplot(StabLDA20, StabLDA40, StabLDA80, x_names = n_tree, xlab = "Number of t
 ```
 
 ```{r}
-powerplot(StabCS3, StabCS6, x_names = n_tree, xlab = "Number of trees", sampsize = c(20, 40))
+powerplot(StabCS3, StabCS6, x_names = c(50, 100, 250, 500, 1000), xlab = "Number of trees", sampsize = c(20, 40))
 ```
 
 ### Tree depth experiment
@@ -230,8 +247,8 @@ PowerExp <- function(mthd = "LDA", n_reps = 100, n_perms = 1000, n_tree = 250, l
     data <- lapply(1:n_reps, FUN = function(x, sampsize, p, effect) LDASamp(n_samples = sampsize, p = p,
                    effect = effect), sampsize = samp_ops[["sampsize"]], p = samp_ops[["p"]], effect = samp_ops[["effect"]])
   } else if(mthd == "CS"){
-     data <- lapply(1:n_reps, FUN = function(x, n, n_clusts) CheckerSamp(n = n, n_clusts = n_clusts),
-                   n = samp_ops[["n_obs_clust"]], n_clusts = samp_ops[["n_clusts"]])
+     data <- lapply(1:n_reps, FUN = function(x, n_obs_clust, n_clusts) CheckerSamp(n = n_obs_clust, n_clusts = n_clusts),
+                   n_obs_clust = samp_ops[["n_obs_clust"]], n_clusts = samp_ops[["n_clusts"]])
   } else {stop("No sampling method specified")}
   out <- 
     foreach(i = 1:n_reps, .combine = "rbind", .packages = "foreach", .export = pckgs) %dopar% {
@@ -251,15 +268,37 @@ PowerExp <- function(mthd = "LDA", n_reps = 100, n_perms = 1000, n_tree = 250, l
 }
 ```
 
+
 ```{r}
 set.seed(1979418)
-LDAs_depth <- PowerExp(mthd = "LDA", sampsize = 40, effect = 25, p = 2, n_reps = 100, maxdepth  = c(seq(1, 10), 15, 10, 20, 40))
+LDAs_depth <- PowerExp(mthd = "LDA", sampsize = 20, effect = 5, p = 2, n_reps = 100, maxdepth  = c(seq(1, 10), 15, 10, 20))
+```
+
+```{r}
+powerplot(LDAs_depth, x_names = c(seq(1, 10), 15, 10, 20), xlab = "Maximum tree depth", sampsize = 20)
 ```
 
 ```{r}
 set.seed(1979418)
-CS_depth <- PowerExp(mthd = "CS", n_obs_clusts = 20, n_clusts = 3, n_reps = 100, maxdepth = c(seq(1, 10), 15, 20, 40, 80, 180))
+LDAs_leaf5 <- PowerExp(mthd = "LDA", sampsize = 20, effect = 5, p = 2, n_reps = 100, leafsize = 5)
 ```
+
+
+```{r}
+set.seed(1979418)
+CS_depth <- PowerExp(mthd = "CS", n_obs_clust = 15, n_clusts = 3, n_reps = 100, maxdepth = c(seq(1, 10), 15, 25, 50, 80, 135))
+```
+
+```{r}
+powerplot(CS_depth, x_names = c(seq(1, 10), 15, 25, 50, 80, 135), xlab = "Maximum tree depth", sampsize = 135)
+```
+
+```{r}
+set.seed(1979418)
+CS_leaf5 <- PowerExp(mthd = "CS", n_obs_clust = 15, n_clusts = 3, n_reps = 100, leafsize = 5)
+```
+
+
 
 ### Simulation experiment
 
@@ -359,9 +398,9 @@ overall.Sgt <- function(regs, labs, n_tree = 250, maxdepth = NA, n_perms = 1000,
   n <- nrow(regs)
   y <- matrix(as.numeric(labs[["y"]]))
   y_perm <- sapply(1:(n_perms - 1), function(x, y) y[sample(nrow(y)), ,drop = FALSE], y = y)
-  X <- gentrees(regs = regs, n_tree = 1, leafsize = leafsize, maxdepth = ceiling(runif(1, min = 0, max = n - 1)), maxnodes = maxnodes, nodesize = nodesize)
+  X <- gentrees(regs = regs, n_tree = 1, leafsize = leafsize, maxdepth = ceiling(runif(1, min = 0, max = 5)), maxnodes = maxnodes, nodesize = nodesize)
   for(i in 1:(n_tree-1)){
-    X <- cbind(X, gentrees(regs = regs, n_tree = 1, leafsize = leafsize, maxdepth = ceiling(runif(1, min = 0, max = n - 1)), maxnodes = maxnodes, nodesize = nodesize))
+    X <- cbind(X, gentrees(regs = regs, n_tree = 1, leafsize = leafsize, maxdepth = ceiling(runif(1, min = 0, max = 5)), maxnodes = maxnodes, nodesize = nodesize))
   }
   S_t <- S(X, y)
   S_p <- c(Inf, S(X, y_perm))
