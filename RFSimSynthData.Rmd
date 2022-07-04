@@ -1,5 +1,5 @@
 ---
-title: "KNN simulation synthetic data"
+title: "RF simulation synthetic data"
 author: "Thomas Devilee"
 date: "9-5-2022"
 output: pdf_document
@@ -205,9 +205,15 @@ powerplot(StabCS, x_names = n_tree, xlab = "Number of trees", sampsize = c(27))
 ```
 
 ```{r}
-CStrees <- gentrees(CSdata, n_tree = 10^5, leafsize = 2)
-Stat <- apply(boom, 2, function(x, y) S(X = as.matrix(x), y = y), y = matrix(CSdata[, "y"]))
+LDAtrees <- gentrees(LDAdata, n_tree = 10^5, leafsize = 3)
+LDAstat <- apply(LDAtrees, 2, function(x, y) S(X = as.matrix(x), y = y), y = matrix(LDAdata[, "y"]))
 ```
+
+```{r}
+CStrees <- gentrees(CSdata, n_tree = 10^5, leafsize = 2)
+CSstat <- apply(CStrees, 2, function(x, y) S(X = as.matrix(x), y = y), y = matrix(CSdata[, "y"]))
+```
+
 ### Tree depth experiment
 
 ```{r}
@@ -342,7 +348,7 @@ nestedcv.rf <- function(folds, regs, labs, mtry = c("p", "p/3", "sqrt(p)"), node
 ```
 
 ```{r}
-fixed.rf_gt <- function(regs, labs, leafsize = 5, n_perms = 1000, n_tree = 250, maxdepth = NA, maxnodes = NA, nodesize = NA){
+fixed.rf_gt <- function(regs, labs, leafsize = 5, n_perms = 1000, n_tree = 5000, maxdepth = NA, maxnodes = NA, nodesize = NA){
   y <- matrix(as.numeric(labs[, "y"]))
   y_perm <- sapply(1:(n_perms - 1), function(x, y) y[sample(nrow(y)), ,drop = FALSE], y = y)
   
@@ -353,14 +359,7 @@ fixed.rf_gt <- function(regs, labs, leafsize = 5, n_perms = 1000, n_tree = 250, 
 ```
 
 ```{r}
-regs <- LDAdata[, !names(LDAdata) %in% "y"]
-labs <- LDAdata[, "y", drop = FALSE]
-folds <- create_folds(n_folds = 5, labs = labs)
-```
-
-
-```{r}
-pval.rf_gt <- function(regs, labs, maxdepth = NA, n_perms = 1000, n_tree = 250, balanced = TRUE, force = FALSE, leafsize = 1, maxnodes = NA, nodesize = NA){
+pval.rf_gt <- function(regs, labs, maxdepth = NA, n_perms = 1000, n_tree = 5000, balanced = TRUE, force = FALSE, leafsize = 1, maxnodes = NA, nodesize = NA){
   i <- 1 ### arbitrarily choose a validation fold
   folds <- create_folds(n_folds = 2, labs = labs, balanced = balanced, force = force) ### create folds such that the groups are balanced
   indx_train <- folds != i
@@ -371,7 +370,7 @@ pval.rf_gt <- function(regs, labs, maxdepth = NA, n_perms = 1000, n_tree = 250, 
   
   y_perm_train <- sapply(1:(n_perms - 1), function(x, y) y[sample(nrow(y)), ,drop = FALSE], y = y_train)
   for (i in 1:length(maxdepth)){
-    p_vals[i] <- randomRF(regs = regs[indx_train, ], y = y_train, y_perm = y_perm_train, n_tree = n_tree, leafsize = leafsize, 
+    p_vals[i] <- randomRF(regs = regs[indx_train, ], y = y_train, y_perm = y_perm_train, n_tree = 500, leafsize = leafsize, 
                           maxdepth = maxdepth[i], maxnodes = maxnodes, nodesize = nodesize)
 
   }
@@ -386,7 +385,7 @@ pval.rf_gt <- function(regs, labs, maxdepth = NA, n_perms = 1000, n_tree = 250, 
 ```
 
 ```{r}
-overall.Sgt <- function(regs, labs, n_tree = 250, maxdepth = NA, n_perms = 1000, leafsize = 1, maxnodes = NA, nodesize = NA){
+overall.Sgt <- function(regs, labs, n_tree = 5000, maxdepth = NA, n_perms = 1000, leafsize = 1, maxnodes = NA, nodesize = NA){
   pckgs <- as.vector(lsf.str(.GlobalEnv))
   n <- nrow(regs)
   y <- matrix(as.numeric(labs[["y"]]))
@@ -467,10 +466,12 @@ LDASim <- function(sampsize, n_reps, effect, p, n_perms = 1000, ...){
 ```
 
 ```{r}
-LDASim(20, 1, 25, 2)
+LDAS_p <- LDASim(sampsize = 40, n_reps = 100, effect = 25, p = c(2, 10, 25, 50, 100))
 ```
 
-
+```{r}
+LDAS_effect <- LDASim(sampsize = 40, n_reps = 100, effect = c(25, 20, 10, 1, 0.05), p = 2)
+```
 
 ```{r}
 CheckerSim <- function(n_reps, n, n_clusts, n_perms = 1000, ...){
@@ -502,11 +503,13 @@ CheckerSim <- function(n_reps, n, n_clusts, n_perms = 1000, ...){
 }
 ```
 
-
 ```{r}
-CheckerSim(1, 3, 3, force = TRUE)
+CBS_nclusts <- CheckerSim(n_reps = 100, n = 3, n_clusts = c(3, 5), force = TRUE)
 ```
 
+```{r}
+CBS_n <- CheckerSim(n_reps = 100, n = c(2, 5, 10), n_clusts = 3, force = TRUE)
+```
 
 
 
