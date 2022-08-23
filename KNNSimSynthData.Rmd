@@ -26,6 +26,7 @@ library(MASS)
 library(gridExtra)
 library(tidyr)
 source("sampling_funcs.R")
+load("wsKNNSynthData.RData")
 set.seed(1979418)
 
 ### function to read excel files in the current directory in the format "sim_X.xlsx"
@@ -113,7 +114,7 @@ InvPropWeight <- function(P, y){
   var.den <- 2*(n-m)
   cov.term <- 2*mu.num
   VarS <- (mu.num^2/mu.den^2) * (var.num/(mu.num^2)  + var.den/(mu.den^2) - 2*cov.term/(mu.num*mu.den))
-  weight <- 1/VarS
+  weight <- 1/sqrt(VarS)
   if (is.nan(weight) | weight > 10^6) weight <- 0
   return(weight)
 }
@@ -318,8 +319,8 @@ SimExp <- function(data, n_reps, pckgs, indx = NA, n_perms = 100, ...){
       perm_knn <- nestedcv.knn(folds = perm_folds, regs = perm_regs, labs = sub_labs) ### compute (permuted) test statistic for the nested knn
       matrix(c(perm_ridge, perm_knn), nrow = 2) ### return permuted test statistics for both tests
     }
-    res[i, 2] <- 1- mean(ridge_stat > perm_mat[1, ]) ### compute emperical p-value for nested ridge
-    res[i, 3] <- 1- mean(knn_stat > perm_mat[2, ]) ### compute emperical p-value for nested knn
+    res[i, 2] <- mean(ridge_stat*(1-1e-14) <= c(Inf, perm_mat[1, , drop = TRUE])) ### compute emperical p-value for nested ridge
+    res[i, 3] <- mean(knn_stat*(1-1e-14) <= c(Inf, perm_mat[2, , drop = TRUE])) ### compute emperical p-value for nested knn
   }
   return(res)
 }
@@ -367,12 +368,12 @@ CheckerSim <- function(n_reps, n, n_clusts, ...){
     out[[i]] <- EmpericalPower(tmp)
   }
   out <- do.call(rbind, out)
-  if(sum(as.numeric(indx_args)) > 0){
-    out <- data.frame(out, params[, var_name])
-    colnames(out)[ncol(out)] <- var_name
-    out <- pivot_longer(out, !last_col(), names_to = "method", values_to = "RF")
-    out <- ggplot(data = out, aes(x = .data[[var_name]], y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point()
-  }
+  #if(sum(as.numeric(indx_args)) > 0){
+  #  out <- data.frame(out, params[, var_name])
+  #  colnames(out)[ncol(out)] <- var_name
+  #  out <- pivot_longer(out, !last_col(), names_to = "method", values_to = "RF")
+  #  out <- ggplot(data = out, aes(x = .data[[var_name]], y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point()
+  #}
   return(out)
 }
 ```
@@ -406,22 +407,23 @@ LDASim <- function(sampsize, n_reps, effect, p, pckgs, ...){
     out[[i]] <- EmpericalPower(tmp)
   }
   out <- do.call(rbind, out)
-  if(sum(as.numeric(indx_args)) > 0){
-    out <- data.frame(out, params[, var_name])
-    colnames(out)[ncol(out)] <- var_name
-    out <- pivot_longer(out, !last_col(), names_to = "method", values_to = "RF")
-    out <- ggplot(data = out, aes(x = .data[[var_name]], y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point()
-  }
+  #if(sum(as.numeric(indx_args)) > 0){
+  #  out <- data.frame(out, params[, var_name])
+  #  colnames(out)[ncol(out)] <- var_name
+  #  out <- pivot_longer(out, !last_col(), names_to = "method", values_to = "RF")
+  #  out <- ggplot(data = out, aes(x = .data[[var_name]], y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point()
+  #}
   return(out)
 }
 ```
 
 ```{r}
+set.seed(1979418)
 LDAS_p <- LDASim(sampsize = 40, n_reps = 100, effect = 25, p = c(2, 10, 25, 50, 100), pckgs = pckgs)
 ```
 
 ```{r}
-LDAS_effect <- LDASim(sampsize = 40, n_reps = 100, effect = c(25, 20, 10, 1, 0.05), p = 2, pckgs = pckgs)
+LDAS_effect <- LDASim(sampsize = 40, n_reps = 100, effect = c(25, 20, 10, 1), p = 2, pckgs = pckgs)
 ```
 
 
