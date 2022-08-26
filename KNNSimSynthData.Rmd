@@ -478,7 +478,7 @@ LDASim <- function(sampsize, n_reps, effect, p, n_perms = 1000, ...){
   #}
   return(out)
 }
-LDASim(sampsize = 40, n_reps = 4, effect = 25, p = c(2, 3))
+LDASim(sampsize = 40, n_reps = 4, p = 2, effect = c(2, 1, 0.5, 0.1), n_perms = 100)
 ```
 
 
