@@ -290,7 +290,7 @@ overallordinal.gt <- function(regs, labs){
 ```{r}
 pckgs <- as.vector(lsf.str())
   
-SimExp <- function(data, n_reps, pckgs, indx = NA, n_perms = 100, ...){
+SimExp <- function(data, n_reps, pckgs, indx = NA, n_perms = 1000, ...){
   labs <- data[, "y"] ### extract labels
   regs <- data[, !names(data) %in% "y"] ### extract predictors
   if(all(is.na(indx))){ ### if no weights specified
@@ -311,7 +311,7 @@ SimExp <- function(data, n_reps, pckgs, indx = NA, n_perms = 100, ...){
     res[i, c(6, 7)] <- overall.gt(regs = sub_regs, labs = sub_labs, invweighted = TRUE) ### compute unweighted and inversely weighted overall gloval test
     res[i, 8] <- overallordinal.gt(regs = sub_regs, labs = sub_labs) ### compute unweighted and inversely weighted overall gloval test
     
-    perm_mat <- foreach(j = 1:n_perms, .combine = "cbind", .export = pckgs) %dopar% { ### for n_perms replications
+    perm_mat <- foreach(j = 1:n_perms, .combine = "cbind", .export = pckgs) %do% { ### for n_perms replications
       perm_indx <- sample(nrow(sub_labs)) ### permutation index
       perm_regs <- sub_regs[perm_indx, ] ### permute regressors
       perm_folds <- create_folds(n_folds = 5, labs = sub_labs, ...) ### compute folds
@@ -379,18 +379,19 @@ CheckerSim <- function(n_reps, n, n_clusts, ...){
 ```
 
 ```{r}
-CheckerSim <- function(n_reps, n, n_clusts, ...){
+CheckerSim <- function(n_reps, n, n_clusts, n_perms = 1000, ...){
   indx_args <- c(length(n) > 1, length(n_clusts) > 1)
   if(sum(as.numeric(indx_args)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
   var_name <- c("n", "n_clusts")[indx_args]
   params <- cbind(n, n_clusts) ### parameter space
   out <- vector(mode = "list", length = nrow(params))
+  pckgs <- as.vector(lsf.str(.GlobalEnv))
   start <- Sys.time()
   for (i in 1:nrow(params)){
     cat("Start element", i, "\n")
-    res <- foreach (j = 1:n_reps, .combine = "rbind", .export = pckgs, .packages = c("doParallel", "globaltest")) %dopar% {
-      data <- CheckerSamp(n = params[[i, "n"]], n_clusts = params[[i, "n_clusts"]])
-      tmp <- SimExp(n_reps = 1, data = data, indx = NA, n_perms = n_perms, ...)
+    res <- foreach (j = 1:n_reps, .combine = "rbind", .export = pckgs, .packages = c("doParallel", "globaltest", "tidyverse")) %dopar% {
+      data <- as_tibble(CheckerSamp(n = params[[i, "n"]], n_clusts = params[[i, "n_clusts"]]))
+      SimExp(n_reps = 1, data = data, indx = NA, n_perms = n_perms, pckgs = pckgs, ...)
     }
     out[[i]] <- EmpericalPower(res)
     end <- Sys.time()
@@ -448,18 +449,19 @@ LDASim <- function(sampsize, n_reps, effect, p, pckgs, ...){
 ```
 
 ```{r}
-LDASim <- function(sampsize, n_reps, effect, p, pckgs, ...){
+LDASim <- function(sampsize, n_reps, effect, p, n_perms = 1000, ...){
   indx_args <- c(length(p) > 1, length(effect) > 1, length(sampsize) > 1)
   if(sum(as.numeric(indx_args)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
   var_name <- c("p", "effect", "sampsize")[indx_args]
   params <- cbind(p, effect, sampsize) ### parameter space
   out <- vector(mode = "list", length = nrow(params))
+  pckgs <- as.vector(lsf.str(.GlobalEnv))
   start <- Sys.time()
   for (i in 1:nrow(params)){
     cat("Start element", i, "\n")
-    res <- foreach (j = 1:n_reps, .combine = "rbind", .export = pckgs, .packages = c("doParallel", "globaltest")) %dopar% {
-      data <- LDASamp(n_samples = params[i, "sampsize"], p = params[i, "p"], effect = params[i, "effect"])
-      tmp <- SimExp(n_reps = 1, data = data, indx = NA, n_perms = n_perms, ...)
+    res <- foreach (j = 1:n_reps, .combine = "rbind", .export = pckgs, .packages = c("doParallel", "globaltest", "tidyverse")) %dopar% {
+      data <- as_tibble(LDASamp(n_samples = params[i, "sampsize"], p = params[i, "p"], effect = params[i, "effect"]))
+      SimExp(n_reps = 1, data = data, indx = NA, n_perms = n_perms, pckgs = pckgs, ...)
     }
     out[[i]] <- EmpericalPower(res)
     end <- Sys.time()
@@ -476,13 +478,13 @@ LDASim <- function(sampsize, n_reps, effect, p, pckgs, ...){
   #}
   return(out)
 }
-LDASim(sampsize = 40, n_reps = 100, effect = c(0.1 , 1, 5, 10), p = c(2), pckgs = pckgs)
+LDASim(sampsize = 40, n_reps = 4, effect = 25, p = c(2, 3))
 ```
 
 
 ```{r}
 set.seed(1979418)
-LDAS_p <- LDASim(sampsize = 40, n_reps = 100, effect = 25, p = c(2, 10, 25, 50, 100), pckgs = pckgs)
+LDAS_p <- LDASim(sampsize = 40, n_reps = 4, effect = 25, p = c(2, 10, 25, 50, 100), pckgs = pckgs)
 ```
 
 ```{r}

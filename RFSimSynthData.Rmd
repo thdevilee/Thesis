@@ -819,7 +819,7 @@ CheckerSim <- function(n_reps, n, n_clusts, n_perms = 1000, ...){
     cat("Start element", i, "\n")
     res <- foreach (j = 1:n_reps, .combine = "rbind", .export = pckgs, .packages = c("doParallel", "randomForest", "globaltest")) %dopar% {
       data <- CheckerSamp(n = params[[i, "n"]], n_clusts = params[[i, "n_clusts"]])
-      tmp <- SimExp(n_reps = 1, data = data, indx = NA, n_perms = n_perms, ...)
+      SimExp(n_reps = 1, data = data, indx = NA, n_perms = n_perms, ...)
     }
     out[[i]] <- EmpericalPower(res)
     end <- Sys.time()
