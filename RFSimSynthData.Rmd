@@ -187,7 +187,7 @@ EmpericalPower(StabLDA)
 ```{r}
 set.seed(123)
 CSdata <- CheckerSamp(n = 3, n_clusts = 3)
-StabCS <- StabExp(n_tree = c(50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000), data = CSdata, n_reps = 100, leafsize = 2)
+StabCS <- StabExp(n_tree = c(n_tree, 50000, 100000), data = CSdata, n_reps = 100, leafsize = 2)
 EmpericalPower(StabCS)
 ```
 
