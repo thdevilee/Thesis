@@ -29,3 +29,14 @@ create_folds <- function(n_folds, labs, balanced = TRUE, force = FALSE, ...){
   }
   return(folds)
 }
+
+exprplot <- function(data, method = NA, x_names = NA, xlab = NA){
+  if(all(is.na(method))) method <- colnames(data)
+  if(all(is.na(x_names))) x_names <- 1:nrow(data)
+  
+  data_wide <- data.frame(data, x_names)
+  colnames(data_wide)[ncol(data_wide)] <- xlab
+  data_long <- pivot_longer(data_wide, !last_col(), names_to = "method", values_to = "RF")
+  out <- ggplot(data = data_long, aes(x = .data[[xlab]], y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point() + ylim(c(0, 1))
+  return(out)
+}
