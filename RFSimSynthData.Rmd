@@ -771,11 +771,11 @@ LDASim(sampsize = 40, n_reps = 8, effect = 25, p = c(100))
 
 ```{r}
 set.seed(1979418)
-LDAS_p <- LDASim(sampsize = 40, n_reps = 100, effect = 25, p = c(2, 10, 25, 50, 100))
+LDAS_p <- LDASim(sampsize = 40, n_reps = 100, effect = 5, p = c(2, 10, 25, 50, 100))
 ```
 
 ```{r}
-LDAS_effect <- LDASim(sampsize = 40, n_reps = 100, effect = c(25, 20, 10, 1), p = 2)
+LDAS_effect <- LDASim(sampsize = 40, n_reps = 100, effect = c(5, 4, 3, 2, 1), p = 2)
 ```
 
 ```{r}
@@ -815,6 +815,8 @@ CheckerSim <- function(n_reps, n, n_clusts, n_perms = 1000, ...){
   var_name <- c("n", "n_clusts", "n_tree")[indx_args]
   params <- cbind(n, n_clusts) ### parameter space
   out <- vector(mode = "list", length = nrow(params))
+  pckgs <- as.vector(lsf.str(.GlobalEnv))
+  start <- Sys.time()
   for (i in 1:nrow(params)){
     cat("Start element", i, "\n")
     res <- foreach (j = 1:n_reps, .combine = "rbind", .export = pckgs, .packages = c("doParallel", "randomForest", "globaltest")) %dopar% {
@@ -845,6 +847,7 @@ CBS_nclusts <- CheckerSim(n_reps = 100, n = 3, n_clusts = c(3, 5), force = TRUE)
 ```
 
 ```{r}
+set.seed(1979)
 CBS_n <- CheckerSim(n_reps = 100, n = c(2, 5, 10), n_clusts = 3, force = TRUE)
 ```
 

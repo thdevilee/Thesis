@@ -280,6 +280,7 @@ overallordinal.gt <- function(labs, ord_mat){
 
 
 ```{r}
+### faster for large data sets
 data <- LDASamp(40, 2, 25)
 regs <- data[, !names(data) %in% "y"]
 labs <- data[, "y", drop = FALSE]
@@ -342,7 +343,7 @@ SimExp <- function(data, n_reps, pckgs, indx = NA, n_perms = 1000, ...){
     knn_stat <- nestedcv.knn(folds = folds, regs = sub_regs, labs = sub_labs) ### compute test statistic for the nested knn
     res[i, 4] <- prop.knn_gt(labs = sub_labs, ord_mat = ord_mat) ### compute p-value for the global test on the partition matrix based on the label proportion
     res[i, 5] <- pval.knn_gt(regs = sub_regs, labs = sub_labs, ...) ### compute p-value for the global test based on the value of k which has the smallest p-value in the training set
-    res[i, c(6, 7)] <- overall.gt(labs = sub_labs, ord_mat = ord_mat, invweighted = TRUE) ### compute unweighted and inversely weighted overall gloval test
+    res[i, c(6, 7)] <- overall.gt(labs = sub_labs, ord_mat = ord_mat, n_perms = 1000, invweighted = TRUE) ### compute unweighted and inversely weighted overall gloval test
     res[i, 8] <- overallordinal.gt(labs = sub_labs, ord_mat = ord_mat) ### compute unweighted and inversely weighted overall gloval test
     
     perm_mat <- foreach(j = 1:n_perms, .combine = "cbind", .export = pckgs) %do% { ### for n_perms replications
@@ -445,11 +446,12 @@ CheckerSim <- function(n_reps, n, n_clusts, n_perms = 1000, ...){
 ```
 
 ```{r}
-CBS_nclusts <- CheckerSim(n_reps = 100, n = 3, n_clusts = c(3, 5), force = TRUE)
+set.seed(19794)
+CBS_nclusts <- CheckerSim(n_reps = 100, n = 3, n_clusts = c(3, 5), n_perms = 1000, force = TRUE)
 ```
 
 ```{r}
-CBS_n <- CheckerSim(n_reps = 100, n = c(2, 5, 10), n_clusts = 3, force = TRUE)
+CBS_n <- CheckerSim(n_reps = 100, n = c(2, 5, 10), n_clusts = 3, n_perms = 1000, force = TRUE)
 ```
 
 
@@ -516,11 +518,12 @@ LDASim <- function(sampsize, n_reps, effect, p, n_perms = 1000, ...){
 
 ```{r}
 set.seed(1979418)
-LDAS_p <- LDASim(sampsize = 40, n_reps = 100, effect = 5, p = c(2, 10, 25, 50, 100))
+LDAS_p <- LDASim(sampsize = 40, n_reps = 100, effect = 5, p = c(2, 10, 25, 50, 100), n_perms = 1000)
 ```
 
 ```{r}
-LDAS_effect <- LDASim(sampsize = 40, n_reps = 100, effect = c(5, 4, 3, 2, 1), p = 2)
+set.seed(197941)
+LDAS_effect <- LDASim(sampsize = 40, n_reps = 100, effect = c(5, 4, 3, 2, 1), p = 2, n_perms = 1000)
 ```
 
 
