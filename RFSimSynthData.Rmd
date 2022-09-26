@@ -609,14 +609,13 @@ n <- 1000
 prop <- mean(impact$mort)
 n_1 <- round(n*prop)
 n_0 <- n - n_1
-impact <- as_tibble(impact)
 indx <- split(seq(1, nrow(impact)), impact$mort)
 indx <- c(sample(indx[[1]], n_0), sample(indx[[2]], n_1))
 regs <- impact[indx, !names(impact) %in% c("mort")]
-labs <- impact[indx, c("mort")]
+labs <- impact[indx, c("mort"), drop = FALSE]
 names(labs) <- "y"
 
-all.tests(regs = regs, labs = labs, n_perms = 1000, force = TRUE)
+all.tests(regs = regs, labs = labs, n_perms = 10, force = TRUE)
 ```
 
 
