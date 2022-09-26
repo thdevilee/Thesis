@@ -525,10 +525,92 @@ dev.off()
 ```
 
 
+```{r}
+gentrees <- function(regs, n_tree, maxdepth = NA, maxnodes = NA, nodesize = NA, leafsize = 1){
+  pckgs <- as.vector(lsf.str(.GlobalEnv))
+  out <- foreach(j = 1:n_tree, .combine = "cbind", .export = pckgs) %dopar% { ################## change back
+    splts <- gensplits(regs = regs, maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize, leafsize = leafsize)
+    sapply(splts, FUN = function(x) as.numeric(substr(x, nchar(x), nchar(x)) == 2))
+  }
+  out <- as.matrix(out)
+  colnames(out) <- NULL
+  rownames(out) <- NULL
+  return(out)
+}
+
+all.tests <- function(regs, labs, indx = NA, n_perms = 1000, ...){
+  res <- rep(NA, 6)
+  col_indx <- sapply(regs, is.numeric)
+  regs[, col_indx] <- scale(regs[, col_indx])
+  cntrs <- lapply(regs[, !col_indx], contrasts, contrasts = FALSE)
+  regs_alt <- model.matrix( ~ .-1, regs, contrasts.arg = cntrs)
+  pckgs <- as.vector(lsf.str(.GlobalEnv))
+  names(res) <- c("linear.gt", "nestedcv.ridge", "fixedcv.rf", "fixed.rf_gt", "pval.rf_gt", "overall.Sgt") ### assign names to the output matrix
 
 
+  folds_ridge <- create_folds(n_folds = 5, labs = labs, ...) ### create folds for functions that require cross validation
+  folds_rf <- create_folds(n_folds = 4, labs = labs, ...)
+  res[1] <- linear.gt(regs = regs_alt, labs = labs) ### compute p-value of the linear global test
+  ridge_stat <- nestedcv.ridge(folds = folds_ridge, regs = regs_alt, labs = labs) ### compute test statistic for the nested ridge
+  rf_stat <- fixedcv.rf(folds = folds_rf, regs = regs_alt, labs = labs) ### compute test statistic for the nested knn
+  res[4] <- fixed.rf_gt(regs = regs_alt, labs = labs, n_perms = n_perms)
+  res[5] <- pval.rf_gt(regs = regs_alt, labs = labs, n_perms = n_perms, ...)
+  res[6] <- overall.Sgt(regs = regs_alt, labs = labs, n_perms = n_perms)
+    
+  perm_mat <- foreach(j = 1:(n_perms-1), .combine = "cbind", .export = pckgs) %dopar% { ### for n_perms replications
+    perm_indx <- sample(nrow(labs)) ### permutation index
+    perm_regs <- regs_alt[perm_indx, ] ### permute regressors
+    perm_folds_ridge <- create_folds(n_folds = 5, labs = labs, ...) ### compute folds
+    perm_folds_rf <- create_folds(n_folds = 4, labs = labs, ...) ### compute folds
+    perm_ridge <- nestedcv.ridge(folds = perm_folds_ridge, regs = perm_regs, labs = labs) ### compute (permuted) test statistic for the nested ridge
+    perm_rf <- fixedcv.rf(folds = perm_folds_rf, regs = perm_regs, labs = labs) ### compute (permuted) test statistic for the nested knn
+    matrix(c(perm_ridge, perm_rf), nrow = 2) ### return permuted test statistics for both tests
+  }
+  
+  res[2] <- mean(ridge_stat*(1-1e-14) <= c(Inf, perm_mat[1, , drop = TRUE])) ### compute emperical p-value for nested ridge
+  res[3] <- mean(rf_stat*(1-1e-14) <= c(Inf, perm_mat[2, , drop = TRUE])) ### compute emperical p-value for nested knn
+  return(res)
+}
+all.tests(regs = regs, labs = labs, n_perms = 1000)
+```
+
+```{r}
+library(metamisc)
+data("impact")
+impact <- impact
+impact <- impact[, !names(impact) %in% c("name", "type")]
+impact <- impact[order(impact[, "mort"]), ]
+
+for (i in c("hypox", "hypots", "tsah", "edh")){
+  impact[, i] <- as.factor(impact[, i])
+}
+
+regs <- impact[c(1:20, 11003:11022), !names(impact) %in% c("mort")]
+labs <- impact[c(1:20, 11003:11022), c("mort"), drop = FALSE]
+names(labs) <- "y"
+folds <- create_folds(n_folds = 5, labs = labs)
+```
 
 
+```{r}
+library(metamisc)
+library(caret)
+data("impact")
+impact <- impact
+impact <- impact[, !names(impact) %in% c("name", "type")]
+impact <- impact[order(impact[, "mort"]), ]
+
+for (i in c("hypox", "hypots", "tsah", "edh")){
+  impact[, i] <- as.factor(impact[, i])
+}
+
+indx <- sample(c(rep(TRUE, 200), rep(FALSE, nrow(impact) - 200)))
+regs <- impact[indx, !names(impact) %in% c("mort")]
+labs <- impact[indx, c("mort")]
+names(labs) <- "y"
+
+all.tests(regs = regs, labs = labs, n_perms = 1000, force = TRUE)
+```
 
 
 

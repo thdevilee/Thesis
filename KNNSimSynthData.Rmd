@@ -529,43 +529,77 @@ comp_dist <- function(X){
   
   return(sqrt(dist_num + dist_nom))
 } 
-comp_dist(tmp)
 ```
 
 ```{r}
-all.tests <- function(regs, labs, pckgs, n_perms = 100, ...){
+nestedcv.knn <- function(folds, regs, labs){
+  data <- data.frame(regs, labs)
+  data[, "y"] <- factor(data[, "y"])
+  n_folds <- max(folds) ### total number of folds
+  res_outer <- numeric(n_folds) ### initialize outerloop output
+  fold_id <- seq(1, n_folds) ### create fold numbers for innerloop
+  n_trin <- (n_folds - 2)*min(table(folds))[[1]]
+  neighbours <- round(seq(1, n_trin, length.out = round(sqrt(n_trin))))
+  for(i in 1:n_folds){  ### for all folds
+    res_inner <- matrix(NA, nrow = n_folds - 1, ncol = length(neighbours)) ### initialize innerloop output matrix
+    for(j in 1:(n_folds - 1)){ ### for all folds - 1 (excluding one outer validations set)
+      for(k in 1:length(neighbours)){ ### for every neighbour
+        indx <- fold_id[fold_id != i]  ### exclude outer validation set
+        model_inner <- caret::knn3(formula = y ~ ., data = data[(folds %in% indx[-j]), ], k = neighbours[k]) ### train on n_folds - 2
+        preds_inner <- predict(model_inner, data[(folds == indx[j]),], type = "class")
+        res_inner[j, k] <- mean(preds_inner != labs[folds == indx[j], , drop = TRUE]) ### validate on innerloop validation set
+      }
+    }
+    res_inner <- apply(res_inner, MARGIN = 2, mean) ### compute average misclassification rate over the innerloop folds
+    optimal_k <- neighbours[which.min(res_inner)]
+    model_outer <- caret::knn3(formula = y ~ ., data = data[folds != i, ], k = optimal_k) ### train on n_folds - 1
+    preds_outer <- predict(model_outer, data[folds == i, ], type = "class") ### train on n_folds - 1 for the k with the smallest misclassification rate
+    res_outer[i] <- mean(preds_outer == labs[folds == i, , drop = TRUE])  ### compute average accuracy on outer validation set
+  }
+  return(weighted.mean(res_outer, table(folds)))
+}
+```
+
+```{r}
+all.tests <- function(regs, labs, n_perms = 1000, ...){
   res <- rep(NA, 8)
   pckgs <- as.vector(lsf.str(.GlobalEnv))
+  col_indx <- sapply(regs, is.numeric)
+  regs[, col_indx] <- scale(regs[, col_indx])
+  cntrs <- lapply(regs[, !col_indx], contrasts, contrasts = FALSE)
+  regs_alt <- model.matrix( ~ .-1, regs, contrasts.arg = cntrs)
   dist_mat <- comp_dist(regs) ### compute distance matrix
   ord_mat <- knn_mat(dist_mat)
   folds <- create_folds(n_folds = 5, labs = labs, ...) ### create folds for functions that require cross validation
-  res[1] <- linear.gt(regs = regs, labs = labs) ### compute p-value of the linear global test
-  ridge_stat <- nestedcv.ridge(folds = folds, regs = regs, labs = labs) ### compute test statistic for the nested ridge
-  #knn_stat <- nestedcv.knn(folds = folds, regs = regs, labs = labs) ### compute test statistic for the nested knn
-  res[4] <- prop.knn_gt(regs = regs, labs = labs, ord_mat = ord_mat) ### compute p-value for the global test on the partition matrix based on the label proportion
+  res[1] <- linear.gt(regs = regs_alt, labs = labs) ### compute p-value of the linear global test
+  ridge_stat <- nestedcv.ridge(folds = folds, regs = regs_alt, labs = labs) ### compute test statistic for the nested ridge
+  knn_stat <- nestedcv.knn(folds = folds, regs = regs, labs = labs) ### compute test statistic for the nested knn
+  res[4] <- prop.knn_gt(labs = labs, ord_mat = ord_mat) ### compute p-value for the global test on the partition matrix based on the label proportion
   res[5] <- pval.knn_gt(regs = regs, labs = labs, ...) ### compute p-value for the global test based on the value of k which has the smallest p-value in the training set
-  res[c(6, 7)] <- overall.gt(regs = regs, labs = labs, ord_mat = ord_mat, invweighted = TRUE) ### compute unweighted and inversely weighted overall gloval test
-  res[8] <- overallordinal.gt(regs = regs, labs = labs, ord_mat = ord_mat) ### compute unweighted and inversely weighted overall gloval test
+  res[c(6, 7)] <- overall.gt(labs = labs, ord_mat = ord_mat, invweighted = TRUE, n_perms = 1000) ### compute unweighted and inversely weighted overall gloval test
+  res[8] <- overallordinal.gt(labs = labs, ord_mat = ord_mat) ### compute unweighted and inversely weighted overall gloval test
     
-  perm_mat <- foreach(j = 1:n_perms, .combine = "cbind", .export = pckgs) %dopar% { ### for n_perms replications
-    perm_indx <- sample(nrow(labs)) ### permutation index
+  perm_mat <- foreach(j = 1:(n_perms-1), .combine = "cbind", .export = pckgs) %dopar% { ### for n_perms replications
+   perm_indx <- sample(nrow(labs)) ### permutation index
     perm_regs <- regs[perm_indx, ] ### permute regressors
+    perm_regs_alt <- regs_alt[perm_indx, ]
     perm_folds <- create_folds(n_folds = 5, labs = labs, ...) ### compute folds
-    perm_ridge <- nestedcv.ridge(folds = perm_folds, regs = perm_regs, labs = labs) ### compute (permuted) test statistic for the nested ridge
-    #perm_knn <- nestedcv.knn(folds = perm_folds, regs = perm_regs, labs = labs) ### compute (permuted) test statistic for the nested knn
-    #matrix(c(perm_ridge, perm_knn), nrow = 2) ### return permuted test statistics for both tests
-    matrix(c(perm_ridge), nrow = 1)
-    }
-  res[2] <- 1- mean(ridge_stat > perm_mat[1, ]) ### compute emperical p-value for nested ridge
-  #res[3] <- 1- mean(knn_stat > perm_mat[2, ]) ### compute emperical p-value for nested knn
+    perm_ridge <- nestedcv.ridge(folds = perm_folds, regs = perm_regs_alt, labs = labs) ### compute (permuted) test statistic for the nested ridge
+    perm_knn <- nestedcv.knn(folds = perm_folds, regs = perm_regs, labs = labs) ### compute (permuted) test statistic for the nested knn
+    matrix(c(perm_ridge, perm_knn), nrow = 2) ### return permuted test statistics for both tests
+  }
+  
+  res[2] <- mean(ridge_stat*(1-1e-14) <= c(Inf, perm_mat[1, , drop = TRUE])) ### compute emperical p-value for nested ridge
+  res[3] <- mean(knn_stat*(1-1e-14) <= c(Inf, perm_mat[2, , drop = TRUE])) ### compute emperical p-value for nested knn
   names(res) <- c("linear.gt", "nestedcv.ridge", "nestedcv.knn", "prop.knn_gt", "pval.knn_gt", "overall.gt", "invoverall.gt", "overallordinal.gt") ### assign names to the output
   return(res)
 }
-all.tests(regs = regs, labs = labs, n_perms = 10)
+all.tests(regs = regs, labs = labs, n_perms = 1000, force = FALSE)
 ```
 
 ```{r}
 library(metamisc)
+library(caret)
 data("impact")
 impact <- impact
 impact <- impact[, !names(impact) %in% c("name", "type")]
@@ -574,18 +608,66 @@ impact <- impact[order(impact[, "mort"]), ]
 for (i in c("hypox", "hypots", "tsah", "edh")){
   impact[, i] <- as.factor(impact[, i])
 }
-names(impact)[names(impact) == "mort"] <- "y"
-impact <- as_tibble(impact)[c(1:20, 11003:11022), ]
-regs <- impact[c(1:20, 11003:11022), !names(impact) %in% c("mort")]
-labs <- impact[c(1:20, 11003:11022), c("y")]
+
+impact <- as_tibble(impact)
+indx <- sample(c(rep(TRUE, 200), rep(FALSE, nrow(impact) - 200)))
+regs <- impact[indx, !names(impact) %in% c("mort")]
+labs <- impact[indx, c("mort")]
+names(labs) <- "y"
+
+all.tests(regs = regs, labs = labs, n_perms = 1000, force = TRUE)
+```
+
+
+```{r}
+library(metamisc)
+library(caret)
+data("impact")
+impact <- impact
+impact <- impact[, !names(impact) %in% c("name", "type")]
+impact <- impact[order(impact[, "mort"]), ]
+
+for (i in c("hypox", "hypots", "tsah", "edh")){
+  impact[, i] <- as.factor(impact[, i])
+}
+impact <- as_tibble(impact)
+regs <- impact[c(1:40, 10983:11022), !names(impact) %in% c("mort")]
+labs <- impact[c(1:40, 10983:11022), c("mort")]
+names(labs) <- "y"
+
+indx <- sample(c(rep(TRUE, 200), rep(FALSE, nrow(impact) - 200)))
+regs <- impact[indx, !names(impact) %in% c("mort")]
+labs <- impact[indx, c("mort")]
+names(labs) <- "y"
+
+all.tests(regs = regs, labs = labs, n_perms = 1000)
+data <- data.frame(regs, labs)
 indx <- sample(c(TRUE, FALSE), size = 40, replace = TRUE)
+tmp <- knn3(formula = y ~ ., data = dat)
+predict(tmp, dat, type = "class")
 
-regs <- impact[c(1:300, 10001:10300), !names(impact) %in% c("mort")]
-labs <- impact[c(1:300, 10001:10300), c("y")]
+folds <- create_folds(5, labs)
+```
 
-all.tests(regs = regs, labs = labs, n_perms = 10)
 
-indx <- sample(c(TRUE, FALSE), size = 40, replace = TRUE)
-knn3(formula = y ~ ., data = impact)
+
+```{r}
+create_folds <- function(n_folds, labs, balanced = TRUE, force = FALSE, ...){
+  if(balanced){
+    if (any(order(as.numeric(labs[["y"]])) != seq(1, nrow(labs)))) stop("Data (labels) is not sorted") ### checks if the above requirments are met
+    n1 <- nrow(labs) - sum(as.numeric(labs[["y"]]))
+    n2 <- sum(as.numeric(labs[["y"]]))
+    reps1 <- n1/n_folds
+    reps2 <- n2/n_folds
+    if ((!is.int(reps1) | !is.int(reps2)) & !force) stop("Cannot balance folds")
+    folds1 <- rep(seq(1, n_folds), ceiling(reps1))[1:n1] ### create n fold indexes for group 1
+    folds2 <- rep(seq(1, n_folds), ceiling(reps2))[1:n2] ### create n fold indexes for group 2
+    folds <- c(sample(folds1), sample(folds2)) ### randomly assign indexes to each observation in a balanced fashion
+  } else{
+    folds <- sample(rep(seq(1, n_folds), nrow(labs)/n_folds)) ### randomly assign folds if balanced is false
+  }
+  return(folds)
+}
+
 ```
 
