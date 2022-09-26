@@ -615,7 +615,7 @@ regs <- impact[indx, !names(impact) %in% c("mort")]
 labs <- impact[indx, c("mort"), drop = FALSE]
 names(labs) <- "y"
 
-all.tests(regs = regs, labs = labs, n_perms = 10, force = TRUE)
+all.tests(regs = regs, labs = labs, n_perms = 1000, force = TRUE)
 ```
 
 
