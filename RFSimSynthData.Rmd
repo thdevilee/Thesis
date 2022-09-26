@@ -604,7 +604,14 @@ for (i in c("hypox", "hypots", "tsah", "edh")){
   impact[, i] <- as.factor(impact[, i])
 }
 
-indx <- sample(c(rep(TRUE, 200), rep(FALSE, nrow(impact) - 200)))
+set.seed(89)
+n <- 1000
+prop <- mean(impact$mort)
+n_1 <- round(n*prop)
+n_0 <- n - n_1
+impact <- as_tibble(impact)
+indx <- split(seq(1, nrow(impact)), impact$mort)
+indx <- c(sample(indx[[1]], n_0), sample(indx[[2]], n_1))
 regs <- impact[indx, !names(impact) %in% c("mort")]
 labs <- impact[indx, c("mort")]
 names(labs) <- "y"
