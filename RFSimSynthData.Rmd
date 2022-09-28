@@ -25,6 +25,119 @@ set.seed(1979418)
 ### Randomforest code
 
 ```{r}
+randomsplit <- function(regs, indx, skip, nodesize, leafsize = 1){
+  unq_indx <- unique(indx)
+  unq_indx <- unq_indx[!unq_indx %in% skip]
+  splt_indx <- rep(NA, nrow(regs))
+  
+  for (i in 1:length(unq_indx)){
+    sub_indx <- indx == unq_indx[i]
+    sub_regs <- regs[sub_indx, ]
+    n_sub <- sum(as.numeric(sub_indx))
+    if(n_sub < 2*leafsize | n_sub < nodesize) next
+    splt <- TRUE
+    fls <- 0
+    while(splt){
+      splt_indx[sub_indx] <- 1
+      rcol <- sample(seq(1,ncol(sub_regs)), size = 1)
+      rrow <- sample(1:nrow(sub_regs), size = 1)
+      ineq_vec <- parse(text = paste(sub_regs[rrow, rcol], sample(c("<", "<=", ">=", ">"), size = 1), sub_regs[, rcol]))
+      cond_indx <- sapply(ineq_vec, eval)
+      splt_indx[sub_indx][cond_indx] <- 2
+      if (var(splt_indx[sub_indx]) != 0) {
+        splt <- FALSE
+      } else {fls <- fls + 1}
+      
+      if (fls == 25){
+        spltb_reg <- regsplits(sub_regs, matrix(unq_indx[i], ncol = nrow(sub_regs)), leafsize = leafsize)
+        splt <- any(unlist(spltb_reg))
+        if (!splt) splt_indx[sub_indx] <- NA
+        
+      }
+    }
+  }
+  return(list("splt_indx" = as.character(splt_indx), "skip" = unique(indx[is.na(splt_indx)])))
+}
+
+
+updatesplit <- function(regs, indx, skip, nodesize, leafsize){
+  out <- indx
+  tmp <- randomsplit(regs = regs, indx = indx, skip = skip, nodesize = nodesize, leafsize = leafsize)
+  updt_indx <- tmp[["splt_indx"]]
+  log_indx <- !is.na(updt_indx)
+  out[log_indx] <- paste0(indx[log_indx], updt_indx[log_indx])
+  return(list("updt_indx" = out, "skip" = tmp[["skip"]]))
+}
+
+regsplits <- function(regs, indx, leafsize){
+  indx_names <- unique(indx)
+  out <- vector(mode = "list", length = length(indx_names))
+  names(out) <- indx_names
+  
+  for (i in 1:length(indx_names)){
+    regs_sub <- regs[(indx == indx_names[i]), ]
+    tmp <- vector(mode = "list", length = ncol(regs))
+    
+    for (j in 1:ncol(regs)){
+      cumtable <- cumsum(table(regs_sub[, j]))
+      indx_cond <- cumtable > leafsize
+      tmp[[j]] <- (max(cumtable) - cumtable[indx_cond][1]) >= leafsize
+      
+    }
+    
+    out[[indx_names[i]]] <- drop(do.call(rbind, tmp))
+    
+  }
+  return(out)
+}
+
+gensplits <- function(regs, maxdepth = NA, maxnodes = NA, nodesize = NA, leafsize = 1){
+  if (is.na(maxnodes)) maxnodes <- nrow(regs)
+  if (is.na(maxdepth)) maxdepth <- nrow(regs)
+  if (is.na(nodesize)) nodesize <- 2
+  indx <- rep("1", nrow(regs))
+  out <- t(matrix(indx))
+  out <- rbind(out, out)
+  
+  i <- 1
+  psbl_split <- TRUE
+  skip <- NA
+  fls <- 0
+  while (max(nchar(out[i, ])) - 1 < maxdepth &
+         length(unique(out[i, ])) < maxnodes &
+         !all(table(out[i, ]) < 2*leafsize) &
+         any(table(out[i, ] >= nodesize)) &
+         psbl_split &
+         !all(out[i, ] %in% skip)
+         ){
+
+    res <- updatesplit(regs = regs, indx = out[i, ], skip = skip, nodesize = nodesize, leafsize = leafsize)
+    tmp <- res[["updt_indx"]]
+    skip <- res[["skip"]]
+
+    if(max(nchar(tmp)) - 1 <= maxdepth &
+       length(unique(tmp)) <= maxnodes &
+       all(table(tmp) >= leafsize) &
+       !isTRUE(all.equal(out[i, ], tmp))){
+      
+      fls <- 0
+      out[i + 1, ] <- tmp
+      i <- i + 1
+      out <- rbind(out[1:i, ], out[i, ])
+    } else fls <- fls + 1
+
+    if (fls == 25){
+      spltb_indx <- out[i, ] %in% skip
+      spltb_reg <- regsplits(regs[!spltb_indx, ], out[i, !spltb_indx], leafsize = leafsize)
+      psbl_split <- any(unlist(spltb_reg))
+    }
+  }
+  return(out[i, ])
+}
+```
+
+
+```{r}
 randomsplit <- function(regs, indx, nodesize, leafsize = 1){
   unq_indx <- unique(indx)
   splt_indx <- rep(NA, nrow(regs))
@@ -615,7 +728,7 @@ regs <- impact[indx, !names(impact) %in% c("mort")]
 labs <- impact[indx, c("mort"), drop = FALSE]
 names(labs) <- "y"
 
-all.tests(regs = regs, labs = labs, n_perms = 1000, force = TRUE)
+real_res <- all.tests(regs = regs, labs = labs, n_perms = 1000, force = TRUE)
 ```
 
 
