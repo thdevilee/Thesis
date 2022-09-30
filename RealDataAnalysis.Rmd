@@ -1,0 +1,108 @@
+---
+title: "RealDataAnalysis"
+author: "Thomas Devilee"
+date: "30-9-2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(foreach)
+library(tidyverse)
+library(doParallel)
+library(randomForest)
+library(globaltest)
+registerDoParallel(cores = 4)
+library(metamisc)
+library(caret)
+library(class)
+library(glmnet)
+library(dplyr)
+library(MASS)
+
+source("corefuncs_knntests.R")
+source("corefuncs_rftests.R")
+source("aux_funcs.R")
+```
+
+```{r}
+all.tests <- function(regs, labs, indx = NA, n_perms = 1000, ...){
+  res <- rep(NA, 12)
+  col_indx <- sapply(regs, is.numeric)
+  regs[, col_indx] <- scale(regs[, col_indx])
+  cntrs <- lapply(regs[, !col_indx], contrasts, contrasts = FALSE)
+  regs_alt <- model.matrix( ~ .-1, regs, contrasts.arg = cntrs)
+  pckgs <- as.vector(lsf.str(.GlobalEnv))
+  dist_mat <- comp_dist(regs) ### compute distance matrix
+  ord_mat <- knn_mat(dist_mat)
+  folds <- create_folds(n_folds = 5, labs = labs, ...) ### create folds for functions that require cross validation
+  names(res) <- c("linear.gt", "nestedcv.ridge", "fixedcv.rf", "fixed.rf_gt", "pval.rf_gt", "overall.Sgt",
+                  "nestedcv.knn", "prop.knn_gt", "pval.knn_gt", "overall.gt", "invoverall.gt", "overallordinal.gt") ### assign names to the output matrix
+
+
+  folds_ridge <- create_folds(n_folds = 5, labs = labs, ...) ### create folds for functions that require cross validation
+  folds_rf <- create_folds(n_folds = 4, labs = labs, ...)
+  res[1] <- linear.gt(regs = regs_alt, labs = labs) ### compute p-value of the linear global test
+  ridge_stat <- nestedcv.ridge(folds = folds_ridge, regs = regs_alt, labs = labs) ### compute test statistic for the nested ridge
+  rf_stat <- fixedcv.rf(folds = folds_rf, regs = regs_alt, labs = labs) ### compute test statistic for the nested knn
+  res[4] <- fixed.rf_gt(regs = regs_alt, labs = labs, n_perms = n_perms)
+  res[5] <- pval.rf_gt(regs = regs_alt, labs = labs, n_perms = n_perms, ...)
+  res[6] <- overall.Sgt(regs = regs_alt, labs = labs, n_perms = n_perms)
+  knn_stat <- nestedcv.knn(folds = folds, regs = regs, labs = labs) ### compute test statistic for the nested knn
+  res[8] <- prop.knn_gt(labs = labs, ord_mat = ord_mat) ### compute p-value for the global test on the partition matrix based on the label proportion
+  res[9] <- pval.knn_gt(regs = regs, labs = as_tibble(labs), ...) ### compute p-value for the global test based on the value of k which has the smallest p-value in the training set
+  res[c(10, 11)] <- overall.gt(labs = labs, ord_mat = ord_mat, invweighted = TRUE, n_perms = 1000) ### compute unweighted and inversely weighted overall gloval test
+  res[12] <- overallordinal.gt(labs = labs, ord_mat = ord_mat) ### compute unweighted and inversely weighted overall gloval test
+    
+  perm_mat <- foreach(j = 1:(n_perms-1), .combine = "cbind", .export = pckgs) %do% { ### for n_perms replications
+    perm_indx <- sample(nrow(labs)) ### permutation index
+    perm_regs <- regs_alt[perm_indx, ] ### permute regressors
+    perm_folds_ridge_knn <- create_folds(n_folds = 5, labs = labs, ...) ### compute folds
+    perm_folds_rf <- create_folds(n_folds = 4, labs = labs, ...) ### compute folds
+    perm_ridge <- nestedcv.ridge(folds = perm_folds_ridge_knn, regs = perm_regs, labs = labs) ### compute (permuted) test statistic for the nested ridge
+    perm_rf <- fixedcv.rf(folds = perm_folds_rf, regs = perm_regs, labs = labs) ### compute (permuted) test statistic for rf
+    perm_knn <- nestedcv.knn(folds = perm_folds_ridge_knn, regs = perm_regs, labs = labs) ### compute (permuted) test statistic for the nested knn
+    matrix(c(perm_ridge, perm_rf, perm_knn), nrow = 3) ### return permuted test statistics for both tests
+  }
+  
+  res[2] <- mean(ridge_stat*(1-1e-14) <= c(Inf, perm_mat[1, , drop = TRUE])) ### compute emperical p-value for nested ridge
+  res[3] <- mean(rf_stat*(1-1e-14) <= c(Inf, perm_mat[2, , drop = TRUE])) ### compute emperical p-value for nested knn
+  res[7] <- mean(knn_stat*(1-1e-14) <= c(Inf, perm_mat[3, , drop = TRUE]))
+  return(res)
+}
+```
+
+```{r}
+data("impact")
+impact <- impact
+impact <- impact[, !names(impact) %in% c("name", "type")]
+impact <- impact[order(impact[, "mort"]), ]
+
+for (i in c("hypox", "hypots", "tsah", "edh")){
+  impact[, i] <- as.factor(impact[, i])
+}
+```
+
+```{r}
+RealRep <- function(data, y_name, n, reps = 100, n_perms = 1000, force = FALSE){
+  pckgs <- as.vector(lsf.str(.GlobalEnv))
+  prop <- mean(data[, y_name])
+  n_1 <- round(n*prop)
+  n_0 <- n - n_1
+  indx <- split(seq(1, nrow(data)), impact[, "mort"])
+  
+  res <- foreach(j = 1:reps, .combine = "rbind", .export = pckgs, .packages = c("globaltest", "foreach", "tidyverse")) %dopar% {
+    indx <- c(sample(indx[[1]], n_0), sample(indx[[2]], n_1))
+    regs <- data[indx, !names(data) %in% y_name]
+    labs <- data[indx, y_name, drop = FALSE]
+    names(labs) <- "y"
+    all.tests(regs = regs, labs = labs, n_perms = n_perms, force = force)
+  }
+  return(res)
+}
+RealRep(impact, "mort", n = 30, reps = 100, n_perms = 1000, force = TRUE)
+```
+
