@@ -103,6 +103,6 @@ RealRep <- function(data, y_name, n, reps = 100, n_perms = 1000, force = FALSE){
   }
   return(res)
 }
-RealRep(impact, "mort", n = 30, reps = 100, n_perms = 1000, force = TRUE)
+real_res <- RealRep(impact, "mort", n = 30, reps = 100, n_perms = 1000, force = TRUE)
 ```
 
