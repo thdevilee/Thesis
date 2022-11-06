@@ -8,8 +8,8 @@ CheckerSamp <- function(n, n_clusts, p = 2, c = 1){
   data <- data + shift ### compute shifted regressors
   data <- cbind(data, labs) ### combine regressors and labels into matrix
   names(data) <- c("x1", "x2", "y") ### rename columns
-  indx <- order(data[["y"]])
-  data <- data[indx, ]
+  indx <- order(data[["y"]]) ### generate ordering index based on y
+  data <- data[indx, ] ### order data according to that index
   return(data)
 }
 

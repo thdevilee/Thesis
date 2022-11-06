@@ -1,24 +1,27 @@
+### function to compute distance matrix based on some matrix X
+### distances for continuous variables are computed using the euclidian distance
+### categorical or factor variables have a distance of 1 when they differ 0 otherwise
 comp_dist <- function(X){
   n <- nrow(X)
-  nom_indx <- unlist(lapply(X, function(x) as.logical(is.factor(x) + is.character(x))))
-  dist_nom <- dist_num <- matrix(0, nrow = n, ncol = n)
+  nom_indx <- unlist(lapply(X, function(x) as.logical(is.factor(x) + is.character(x)))) ### generate logical vector indicating char/fac variables
+  dist_nom <- dist_num <- matrix(0, nrow = n, ncol = n) ### initate empty distance matrix
   
-  if(ncol(X) - sum(as.numeric(nom_indx)) > 0){
-    X_num <- scale(X[, !nom_indx])
-    dist_num <- as.matrix(dist(X_num, diag = TRUE, upper = TRUE))^2
+  if(ncol(X) - sum(as.numeric(nom_indx)) > 0){ ### if continuous variables exist in the data
+    X_num <- scale(X[, !nom_indx]) ### scale continuous variable
+    dist_num <- as.matrix(dist(X_num, diag = TRUE, upper = TRUE))^2 ### compute squared euclidian distance matrix
   }
   
-  if(sum(as.numeric(nom_indx)) > 0){
-    X_nom <- X[, nom_indx]
-    for(i in 1:(n - 1)){
+  if(sum(as.numeric(nom_indx)) > 0){ ### if cat/fac variables exist in the data
+    X_nom <- X[, nom_indx] ### extract cat/fac variables
+    for(i in 1:(n - 1)){ ### compute all elements in the upper triangle of the cat/fac distance matrix
       for(j in (i + 1):n){
         dist_nom[i, j] <- sum(X_nom[i,] != X_nom[j,])
       }
     }
-    dist_nom[lower.tri(dist_nom)] <- dist_nom[upper.tri(dist_nom)]
+    dist_nom[lower.tri(dist_nom)] <- dist_nom[upper.tri(dist_nom)] ### reflect upper triangle on lower triangle
   }
   
-  return(sqrt(dist_num + dist_nom))
+  return(sqrt(dist_num + dist_nom)) ### sum the result of both categories of variable and take the square root
 } 
 
 ### function to compute knn ordering matrix for a given distance matrix
@@ -28,7 +31,7 @@ knn_mat <- function(dist_mat){
   return(nn)
 }
 
-
+### function to compute variance of S by means of taylor approximation (based on partition matrix for some k and y)
 InvPropWeight <- function(P, y){
   data <- data.frame(P, y = y)
   Z <- model.matrix(y ~ 1, data = data)
@@ -58,6 +61,7 @@ InvPropWeight <- function(P, y){
   return(weight)
 }
 
+### efficient computation of inner product of stacked partition matrices --> requires order matrix from knn_mat func
 XXT <- function(ord_mat, weights = NA){
   weighting <- TRUE ### weighting true by default
   k <- dim(ord_mat)[1] ### number of observations/partition matrices
@@ -102,7 +106,7 @@ nestedcv.ridge <- function(folds, regs, labs){
     preds <- predict(res_cv, as.matrix(regs[folds == i,]), s = "lambda.min") >= 0.5 ### make predictions for the validation set from a model with the optimal lambda
     res_outer[i] <- mean(preds == labs[folds == i, , drop = TRUE]) ### compute average accuracy on outer validation set
   }
-  return(weighted.mean(res_outer, table(folds)))
+  return(weighted.mean(res_outer, table(folds))) ### compute weighted accuracy
 }
 
 ### function to performed nested knn based on a specified number of neighbours
@@ -112,8 +116,8 @@ nestedcv.knn <- function(folds, regs, labs){
   n_folds <- max(folds) ### total number of folds
   res_outer <- numeric(n_folds) ### initialize outerloop output
   fold_id <- seq(1, n_folds) ### create fold numbers for innerloop
-  n_trin <- (n_folds - 2)*min(table(folds))[[1]]
-  neighbours <- round(seq(1, n_trin, length.out = round(sqrt(n_trin))))
+  n_trin <- (n_folds - 2)*min(table(folds))[[1]] ### makes sure the value of k cannot be larger than the number of obs (see line below)
+  neighbours <- round(seq(1, n_trin, length.out = round(sqrt(n_trin)))) ### generate grid of k
   for(i in 1:n_folds){  ### for all folds
     res_inner <- matrix(NA, nrow = n_folds - 1, ncol = length(neighbours)) ### initialize innerloop output matrix
     for(j in 1:(n_folds - 1)){ ### for all folds - 1 (excluding one outer validations set)
@@ -130,7 +134,7 @@ nestedcv.knn <- function(folds, regs, labs){
     preds_outer <- predict(model_outer, data[folds == i, ], type = "class") ### train on n_folds - 1 for the k with the smallest misclassification rate
     res_outer[i] <- mean(preds_outer == labs[folds == i, , drop = TRUE])  ### compute average accuracy on outer validation set
   }
-  return(weighted.mean(res_outer, table(folds)))
+  return(weighted.mean(res_outer, table(folds))) ### compute weighted accuracy
 }
 
 ### function to perform global test on a partition matrix which corresponds to the (smallest) fraction of labels times the number of observations (rounded)
@@ -164,40 +168,44 @@ pval.knn_gt <- function(regs, labs, balanced = TRUE, force = FALSE){
   return(res)
 }
 
+
+### function to compute ranked distance GT
 overallordinal.gt <- function(labs, ord_mat){
-  X  <- apply(ord_mat, 2, rank)
-  res <- globaltest::gt(y ~ 1, y ~ ., data = data.frame(X, y = labs))@result[1]
+  X  <- apply(ord_mat, 2, rank) ### compute columwise ranks --> small to large
+  res <- globaltest::gt(y ~ 1, y ~ ., data = data.frame(X, y = labs))@result[1] ### perform GT
   return(res)
 }
 
 
 
-
+### compute GT statistic numerator based on inner product matrix and y
 S_XXT <- function(XXt, y){
-  out <- apply(y, 2, FUN = function(y, XXt) t(y) %*% XXt %*% y, XXt = XXt)
+  out <- apply(y, 2, FUN = function(y, XXt) t(y) %*% XXt %*% y, XXt = XXt) ### efficient computation numeration GT statistic
   return(drop(out))
 }
 
+### function to empirical p-value of stacked GT
 GT_p <- function(ord_mat, y, n_perms, weights = NA){
-  XXt <- XXT(ord_mat = ord_mat, weights = weights)
-  S_t <- S_XXT(XXt = XXt, y = y)
-  y_perm <- sapply(1:(n_perms - 1), function(x, y) y[sample(nrow(y)), ,drop = FALSE], y = y)
-  S_p <- c(Inf, S_XXT(XXt, y = y_perm))
-  res <- mean(S_t*(1-1e-14) <= S_p)
+  XXt <- XXT(ord_mat = ord_mat, weights = weights) ###compute inner product matrix of the data
+  S_t <- S_XXT(XXt = XXt, y = y) ### compute GT statistic numerator given the XXt
+  y_perm <- sapply(1:(n_perms - 1), function(x, y) y[sample(nrow(y)), ,drop = FALSE], y = y) ### generate perms of y
+  S_p <- c(Inf, S_XXT(XXt, y = y_perm)) ### compute permuted test statistic
+  res <- mean(S_t*(1-1e-14) <= S_p) ### empirical p-value
   return(res)
 }
 
+### function to compute overall + uniform overall stacked GT
 overall.gt <- function(labs, ord_mat, n_perms, invweighted = FALSE){
   n <- nrow(ord_mat) ### compute number of observations
-  y <- matrix(residuals(lm(y ~ 1, data = labs)), nrow = nrow(labs))
-  weights <- rep(NA, n)
+  y <- matrix(residuals(lm(y ~ 1, data = labs)), nrow = nrow(labs)) ### adjust y for an intercept
+  weights <- rep(NA, n) ### generate empty weight vector
   if(invweighted){
     for(i in 1:n){ ### for all 1, ..., k neighbours
       P <- ifelse(ord_mat > (n - i), 1, 0) ### compute partition matrix
-      weights[i] <- InvPropWeight(P, labs)
+      weights[i] <- InvPropWeight(P, labs) ### compute weight for each k
     }
   }
-  res <- GT_p(ord_mat = ord_mat, y = y, n_perms = n_perms)
+  res <- GT_p(ord_mat = ord_mat, y = y, n_perms = n_perms) ### compute p-value for overall stacked GT
   
   if(invweighted){ ### if inverse weights
     res <- cbind(res, GT_p(ord_mat = ord_mat, y = y, n_perms = n_perms, weights = weights)) #### perform global test on inversely weighted partition matrices

@@ -15,48 +15,49 @@ library(tidyverse)
 library(doParallel)
 library(randomForest)
 library(globaltest)
-registerDoParallel(cores = 4)
 library(metamisc)
 library(caret)
 library(class)
 library(glmnet)
-library(dplyr)
 library(MASS)
+registerDoParallel(cores = 4)
 set.seed(1979418)
 
+load("wsRealDataAnalysis.RData")
 source("corefuncs_knntests.R")
 source("corefuncs_rftests.R")
 source("aux_funcs.R")
 ```
 
 ```{r}
+### function that computes all tests previously introduced for some data set
 all.tests <- function(regs, labs, indx = NA, n_perms = 1000, ...){
-  res <- rep(NA, 12)
-  col_indx <- sapply(regs, is.numeric)
-  regs[, col_indx] <- scale(regs[, col_indx])
-  cntrs <- lapply(regs[, !col_indx], contrasts, contrasts = FALSE)
-  regs_alt <- model.matrix( ~ .-1, regs, contrasts.arg = cntrs)
-  pckgs <- as.vector(lsf.str(.GlobalEnv))
+  res <- rep(NA, 12) ### initialize empty results vector for all tests
+  col_indx <- sapply(regs, is.numeric) ### logical index for numeric variables
+  regs[, col_indx] <- scale(regs[, col_indx]) ### scale numeric variable
+  cntrs <- lapply(regs[, !col_indx], contrasts, contrasts = FALSE) ### generate contrast for categorical variables
+  regs_alt <- model.matrix( ~ .-1, regs, contrasts.arg = cntrs) ### redefine orginal matrix without dummy coding
+  pckgs <- as.vector(lsf.str(.GlobalEnv)) ### required for parallel computation
   dist_mat <- comp_dist(regs) ### compute distance matrix
-  ord_mat <- knn_mat(dist_mat)
+  ord_mat <- knn_mat(dist_mat) ### compute row wise ranked distance matrix
   folds <- create_folds(n_folds = 5, labs = labs, ...) ### create folds for functions that require cross validation
   names(res) <- c("linear.gt", "nestedcv.ridge", "fixedcv.rf", "fixed.rf_gt", "pval.rf_gt", "overall.Sgt",
                   "nestedcv.knn", "prop.knn_gt", "pval.knn_gt", "overall.gt", "invoverall.gt", "overallordinal.gt") ### assign names to the output matrix
 
 
-  folds_ridge <- create_folds(n_folds = 5, labs = labs, ...) ### create folds for functions that require cross validation
-  folds_rf <- create_folds(n_folds = 4, labs = labs, ...)
+  folds_ridge <- create_folds(n_folds = 5, labs = labs, ...) ### create folds for nested cross-validation with ridge
+  folds_rf <- create_folds(n_folds = 4, labs = labs, ...) ### create folds for cross-validation with rf
   res[1] <- linear.gt(regs = regs_alt, labs = labs) ### compute p-value of the linear global test
   ridge_stat <- nestedcv.ridge(folds = folds_ridge, regs = regs_alt, labs = labs) ### compute test statistic for the nested ridge
-  rf_stat <- fixedcv.rf(folds = folds_rf, regs = regs_alt, labs = labs) ### compute test statistic for the nested knn
-  res[4] <- fixed.rf_gt(regs = regs_alt, labs = labs, n_perms = n_perms)
-  res[5] <- pval.rf_gt(regs = regs_alt, labs = labs, n_perms = n_perms, ...)
-  res[6] <- overall.Sgt(regs = regs_alt, labs = labs, n_perms = n_perms)
+  rf_stat <- fixedcv.rf(folds = folds_rf, regs = regs_alt, labs = labs) ### compute test statistic for the cross-validation with rf
+  res[4] <- fixed.rf_gt(regs = regs_alt, labs = labs, n_perms = n_perms) ### compute test statistic for the fixed rf gt
+  res[5] <- pval.rf_gt(regs = regs_alt, labs = labs, n_perms = n_perms, ...) ### compute test statistic for the np-value rf gt
+  res[6] <- overall.Sgt(regs = regs_alt, labs = labs, n_perms = n_perms) ### compute test statistic for the sampling overall gt
   knn_stat <- nestedcv.knn(folds = folds, regs = regs, labs = labs) ### compute test statistic for the nested knn
   res[8] <- prop.knn_gt(labs = labs, ord_mat = ord_mat) ### compute p-value for the global test on the partition matrix based on the label proportion
   res[9] <- pval.knn_gt(regs = regs, labs = as_tibble(labs), ...) ### compute p-value for the global test based on the value of k which has the smallest p-value in the training set
   res[c(10, 11)] <- overall.gt(labs = labs, ord_mat = ord_mat, invweighted = TRUE, n_perms = 1000) ### compute unweighted and inversely weighted overall gloval test
-  res[12] <- overallordinal.gt(labs = labs, ord_mat = ord_mat) ### compute unweighted and inversely weighted overall gloval test
+  res[12] <- overallordinal.gt(labs = labs, ord_mat = ord_mat) ### compute the ranked distance gt
     
   perm_mat <- foreach(j = 1:(n_perms-1), .combine = "cbind", .export = pckgs) %do% { ### for n_perms replications
     perm_indx <- sample(nrow(labs)) ### permutation index
@@ -70,41 +71,44 @@ all.tests <- function(regs, labs, indx = NA, n_perms = 1000, ...){
   }
   
   res[2] <- mean(ridge_stat*(1-1e-14) <= c(Inf, perm_mat[1, , drop = TRUE])) ### compute emperical p-value for nested ridge
-  res[3] <- mean(rf_stat*(1-1e-14) <= c(Inf, perm_mat[2, , drop = TRUE])) ### compute emperical p-value for nested knn
-  res[7] <- mean(knn_stat*(1-1e-14) <= c(Inf, perm_mat[3, , drop = TRUE]))
+  res[3] <- mean(rf_stat*(1-1e-14) <= c(Inf, perm_mat[2, , drop = TRUE])) ### compute emperical p-value for cross-validation with rf
+  res[7] <- mean(knn_stat*(1-1e-14) <= c(Inf, perm_mat[3, , drop = TRUE])) ### compute emperical p-value for nested knn
   return(res)
 }
 ```
 
 ```{r}
-data("impact")
-impact <- impact
-impact <- impact[, !names(impact) %in% c("name", "type")]
-impact <- impact[order(impact[, "mort"]), ]
+data("impact") ### load data
+impact <- impact 
+impact <- impact[, !names(impact) %in% c("name", "type")] ### remove meta data
+impact <- impact[order(impact[, "mort"]), ] ### order data based on outcome
 
-for (i in c("hypox", "hypots", "tsah", "edh")){
+for (i in c("hypox", "hypots", "tsah", "edh")){ ### coerce all categorical variables in to factors
   impact[, i] <- as.factor(impact[, i])
 }
 ```
 
 ```{r}
+### function to compute all test statistic of all.tests for some number of replications
 RealRep <- function(data, y_name, n, reps = 100, n_perms = 1000, force = FALSE){
-  pckgs <- as.vector(lsf.str(.GlobalEnv))
-  prop <- mean(data[, y_name])
-  n_1 <- round(n*prop)
-  n_0 <- n - n_1
-  indx <- split(seq(1, nrow(data)), impact[, "mort"])
+  pckgs <- as.vector(lsf.str(.GlobalEnv)) ### required for parallel computation
+  prop <- mean(data[, y_name]) ### compute proportion of labels
+  n_1 <- round(n*prop) ### compute number of observations in group 1
+  n_0 <- n - n_1 ### compute number of observations in group 2
+  indx <- split(seq(1, nrow(data)), impact[, "mort"]) ### split data based on outcome
   
+  ### parallel computation
   res <- foreach(j = 1:reps, .combine = "rbind", .export = pckgs, .packages = c("globaltest", "foreach", "tidyverse")) %dopar% {
-    indx <- c(sample(indx[[1]], n_0), sample(indx[[2]], n_1))
-    regs <- data[indx, !names(data) %in% y_name]
-    labs <- data[indx, y_name, drop = FALSE]
+    indx <- c(sample(indx[[1]], n_0), sample(indx[[2]], n_1)) ### sample index from either group (based on outcome) in accordance with the proportion in the full data set
+    regs <- data[indx, !names(data) %in% y_name] ### subset regressors
+    labs <- data[indx, y_name, drop = FALSE] ### subset labels
     names(labs) <- "y"
-    all.tests(regs = regs, labs = labs, n_perms = n_perms, force = force)
+    all.tests(regs = regs, labs = labs, n_perms = n_perms, force = force) ### compute all test statistic
   }
   return(res)
 }
 
+### split parallel computation into 25 step (= 4 replications per step) because of bug in the package
 n_par <- 25
 real_res <- vector(mode = "list", length = n_par)
 for (i in 1:n_par){

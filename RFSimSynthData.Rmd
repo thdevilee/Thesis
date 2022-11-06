@@ -15,276 +15,39 @@ library(tidyverse)
 library(doParallel)
 library(randomForest)
 library(globaltest)
+library(ggpubr)
 registerDoParallel(cores = 4)
+
+load("wsRFSynthData.RData")
+source("corefuncs_rftests.R")
 source("sampling_funcs.R")
 source("aux_funcs.R")
-load("wsRFSynthData.RData")
-set.seed(1979418)
+
+wd <- "C:/Users/" ### set some directory to write all images to
 ```
 
 ### Randomforest code
 
-```{r}
-randomsplit <- function(regs, indx, skip, nodesize, leafsize = 1){
-  unq_indx <- unique(indx)
-  unq_indx <- unq_indx[!unq_indx %in% skip]
-  splt_indx <- rep(NA, nrow(regs))
-  
-  for (i in 1:length(unq_indx)){
-    sub_indx <- indx == unq_indx[i]
-    sub_regs <- regs[sub_indx, ]
-    n_sub <- sum(as.numeric(sub_indx))
-    if(n_sub < 2*leafsize | n_sub < nodesize) next
-    splt <- TRUE
-    fls <- 0
-    while(splt){
-      splt_indx[sub_indx] <- 1
-      rcol <- sample(seq(1,ncol(sub_regs)), size = 1)
-      rrow <- sample(1:nrow(sub_regs), size = 1)
-      ineq_vec <- parse(text = paste(sub_regs[rrow, rcol], sample(c("<", "<=", ">=", ">"), size = 1), sub_regs[, rcol]))
-      cond_indx <- sapply(ineq_vec, eval)
-      splt_indx[sub_indx][cond_indx] <- 2
-      if (var(splt_indx[sub_indx]) != 0) {
-        splt <- FALSE
-      } else {fls <- fls + 1}
-      
-      if (fls == 25){
-        spltb_reg <- regsplits(sub_regs, matrix(unq_indx[i], ncol = nrow(sub_regs)), leafsize = leafsize)
-        splt <- any(unlist(spltb_reg))
-        if (!splt) splt_indx[sub_indx] <- NA
-        
-      }
-    }
-  }
-  return(list("splt_indx" = as.character(splt_indx), "skip" = unique(indx[is.na(splt_indx)])))
-}
-
-
-updatesplit <- function(regs, indx, skip, nodesize, leafsize){
-  out <- indx
-  tmp <- randomsplit(regs = regs, indx = indx, skip = skip, nodesize = nodesize, leafsize = leafsize)
-  updt_indx <- tmp[["splt_indx"]]
-  log_indx <- !is.na(updt_indx)
-  out[log_indx] <- paste0(indx[log_indx], updt_indx[log_indx])
-  return(list("updt_indx" = out, "skip" = tmp[["skip"]]))
-}
-
-regsplits <- function(regs, indx, leafsize){
-  indx_names <- unique(indx)
-  out <- vector(mode = "list", length = length(indx_names))
-  names(out) <- indx_names
-  
-  for (i in 1:length(indx_names)){
-    regs_sub <- regs[(indx == indx_names[i]), ]
-    tmp <- vector(mode = "list", length = ncol(regs))
-    
-    for (j in 1:ncol(regs)){
-      cumtable <- cumsum(table(regs_sub[, j]))
-      indx_cond <- cumtable > leafsize
-      tmp[[j]] <- (max(cumtable) - cumtable[indx_cond][1]) >= leafsize
-      
-    }
-    
-    out[[indx_names[i]]] <- drop(do.call(rbind, tmp))
-    
-  }
-  return(out)
-}
-
-gensplits <- function(regs, maxdepth = NA, maxnodes = NA, nodesize = NA, leafsize = 1){
-  if (is.na(maxnodes)) maxnodes <- nrow(regs)
-  if (is.na(maxdepth)) maxdepth <- nrow(regs)
-  if (is.na(nodesize)) nodesize <- 2
-  indx <- rep("1", nrow(regs))
-  out <- t(matrix(indx))
-  out <- rbind(out, out)
-  
-  i <- 1
-  psbl_split <- TRUE
-  skip <- NA
-  fls <- 0
-  while (max(nchar(out[i, ])) - 1 < maxdepth &
-         length(unique(out[i, ])) < maxnodes &
-         !all(table(out[i, ]) < 2*leafsize) &
-         any(table(out[i, ] >= nodesize)) &
-         psbl_split &
-         !all(out[i, ] %in% skip)
-         ){
-
-    res <- updatesplit(regs = regs, indx = out[i, ], skip = skip, nodesize = nodesize, leafsize = leafsize)
-    tmp <- res[["updt_indx"]]
-    skip <- res[["skip"]]
-
-    if(max(nchar(tmp)) - 1 <= maxdepth &
-       length(unique(tmp)) <= maxnodes &
-       all(table(tmp) >= leafsize) &
-       !isTRUE(all.equal(out[i, ], tmp))){
-      
-      fls <- 0
-      out[i + 1, ] <- tmp
-      i <- i + 1
-      out <- rbind(out[1:i, ], out[i, ])
-    } else fls <- fls + 1
-
-    if (fls == 25){
-      spltb_indx <- out[i, ] %in% skip
-      spltb_reg <- regsplits(regs[!spltb_indx, ], out[i, !spltb_indx], leafsize = leafsize)
-      psbl_split <- any(unlist(spltb_reg))
-    }
-  }
-  return(out[i, ])
-}
-```
-
-
-```{r}
-randomsplit <- function(regs, indx, nodesize, leafsize = 1){
-  unq_indx <- unique(indx)
-  splt_indx <- rep(NA, nrow(regs))
-  
-  for (i in 1:length(unq_indx)){
-    sub_indx <- indx == unq_indx[i]
-    sub_regs <- regs[sub_indx, ]
-    n_sub <- sum(as.numeric(sub_indx))
-    if(n_sub < 2*leafsize | n_sub < nodesize) next
-    splt <- TRUE
-    while(splt){
-      splt_indx[sub_indx] <- 1
-      rcol <- sample(seq(1,ncol(sub_regs)), size = 1)
-      rrow <- sample(1:nrow(sub_regs), size = 1)
-      ineq_vec <- parse(text = paste(sub_regs[rrow, rcol], sample(c("<", "<=", ">=", ">"), size = 1), sub_regs[, rcol]))
-      cond_indx <- sapply(ineq_vec, eval)
-      splt_indx[sub_indx][cond_indx] <- 2
-      if (var(splt_indx[sub_indx]) != 0) splt <- FALSE
-    }
-  }
-  return(as.character(splt_indx))
-}
-
-updatesplit <- function(regs, indx, nodesize, leafsize){
-  out <- indx
-  updt_indx <- randomsplit(regs = regs, indx = indx, nodesize = nodesize, leafsize = leafsize)
-  log_indx <- !is.na(updt_indx)
-  out[log_indx] <- paste0(indx[log_indx], updt_indx[log_indx])
-  return(out)
-}
-
-regsplits <- function(regs, indx, leafsize){
-  indx_names <- unique(indx)
-  out <- vector(mode = "list", length = length(indx_names))
-  names(out) <- indx_names
-  
-  for (i in 1:length(indx_names)){
-    regs_sub <- regs[(indx == indx_names[i]), ]
-    tmp <- vector(mode = "list", length = ncol(regs))
-    
-    for (j in 1:ncol(regs)){
-      cumtable <- table(regs_sub[, j])
-      tmp[[j]] <- (sum(cumtable) - max(cumtable)) >= leafsize
-    }
-    
-    out[[indx_names[i]]] <- drop(do.call(rbind, tmp))
-    
-  }
-  return(out)
-}
-
-gensplits <- function(regs, maxdepth = NA, maxnodes = NA, nodesize = NA, leafsize = 1){
-  if (is.na(maxnodes)) maxnodes <- nrow(regs)
-  if (is.na(maxdepth)) maxdepth <- nrow(regs)
-  if (is.na(nodesize)) nodesize <- 2
-  indx <- rep("1", nrow(regs))
-  out <- t(matrix(indx))
-  out <- rbind(out, out)
-  
-  i <- 1
-  fls <- 0
-  psbl_split <- TRUE
-  while (max(nchar(out[i, ])) - 1 < maxdepth &
-         length(unique(out[i, ])) < maxnodes &
-         !all(table(out[i, ]) < 2*leafsize) &
-         any(table(out[i, ] >= nodesize)) &
-         psbl_split
-         ){
-    tmp <- updatesplit(regs = regs, indx = out[i, ], nodesize = nodesize, leafsize = leafsize)
-    
-
-    if(max(nchar(tmp)) - 1 <= maxdepth &
-       length(unique(tmp)) <= maxnodes &
-       all(table(tmp) >= leafsize)){
-      
-      fls <- 0
-      out[i + 1, ] <- tmp
-      i <- i + 1
-      out <- rbind(out[1:i, ], out[i, ])
-    } else fls <- fls + 1
-    
-    if (fls == 25){
-      spltb_reg <- regsplits(regs, out[i, ], leafsize = leafsize)
-      psbl_split <- any(unlist(spltb_reg))
-      }
-  }
-  return(out[i, ])
-}
-
-
-gentrees <- function(regs, n_tree, maxdepth = NA, maxnodes = NA, nodesize = NA, leafsize = 1){
-  pckgs <- as.vector(lsf.str(.GlobalEnv))
-  out <- foreach(j = 1:n_tree, .combine = "cbind", .export = pckgs) %do% { ################## change back
-    splts <- gensplits(regs = regs, maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize, leafsize = leafsize)
-    sapply(splts, FUN = function(x) as.numeric(substr(x, nchar(x), nchar(x)) == 2))
-  }
-  out <- as.matrix(out)
-  colnames(out) <- NULL
-  rownames(out) <- NULL
-  return(out)
-}
-
-randomRF <- function(regs, y, y_perm, n_tree, maxdepth = NA, maxnodes = NA, nodesize = NA, leafsize = 1){
-  X <- gentrees(regs = regs, n_tree = n_tree, leafsize = leafsize, maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize)
-  S_t <- S(X, y)
-  S_p <- c(Inf, S(X, y_perm))
-  out <- mean(S_t*(1-1e-14) <= S_p)
-  return(out)
-}
-
-S <- function(X, y){
-  Z <- matrix(1, nrow = nrow(X))
-  X <- X - Z %*% solve(crossprod(Z), crossprod(Z, X))
-  tmp <- crossprod(X, y)^2
-  out <- apply(tmp, 2, sum)
-  return(drop(out))
-}
-```
-
-```{r}
-LDA20 <- LDASamp(40, 2, 25)
-regs <- LDA20[, !names(LDA20) %in% "y"]
-labs <- LDA20[, "y", drop = FALSE]
-system.time(gentrees(regs, 100))
-#system.time(replicate(10000, randomsplit(regs, indx = rep(1, 20), 2)))
-```
-
-
 ### Stability experiment
 
 ```{r}
+### function to perform the stability experiment
 StabExp <- function(n_tree, data, n_reps = 100, n_perms = 1000, leafsize = 5, maxdepth = NA, maxnodes = NA, nodesize = NA){
-  pckgs <- as.vector(lsf.str(.GlobalEnv))
+  pckgs <- as.vector(lsf.str(.GlobalEnv)) ### required for parallel computing
   labs <- data[, "y", drop = FALSE] ### extract labels
   regs <- data[, !names(data) %in% "y"] ### extract predictors
-  y <- matrix(residuals(lm(y ~ 1, data = labs)), nrow = nrow(labs))
+  y <- matrix(residuals(lm(y ~ 1, data = labs)), nrow = nrow(labs)) ### orthogonalize with respect to an intercept
   
   out <- 
-    foreach(i = 1:n_reps, .combine = "cbind", .packages = "foreach", .export = pckgs) %dopar% {
-      y_perm <- sapply(1:(n_perms - 1), function(x, y) y[sample(nrow(y)), ,drop = FALSE], y = y)
-      foreach (j = 1:length(n_tree), .combine = "c", .export = pckgs) %do% {
+    foreach(i = 1:n_reps, .combine = "cbind", .packages = "foreach", .export = pckgs) %dopar% { ### parallel loop for the replications
+      y_perm <- sapply(1:(n_perms - 1), function(x, y) y[sample(nrow(y)), ,drop = FALSE], y = y) ### permutations of y
+      foreach (j = 1:length(n_tree), .combine = "c", .export = pckgs) %do% { ### sequential loop for the number of trees
         randomRF(regs = regs, y = y, y_perm = y_perm, n_tree = n_tree[j], leafsize = leafsize, maxdepth = maxdepth,
-                 maxnodes = maxnodes, nodesize = nodesize)
+                 maxnodes = maxnodes, nodesize = nodesize) ### grows trees and compute p-value
       }
     }
-  out <- data.frame(t(out), row.names = NULL)
-  colnames(out) <- n_tree
+  out <- data.frame(t(out), row.names = NULL) ### coerce results into a data frame (= rows represent number of trees)
+  colnames(out) <- n_tree ### set col names to the number of trees
   return(out)
 }
 ```
@@ -305,76 +68,85 @@ EmpericalPower(StabCS)
 ```
 
 ```{r}
+### function to plot results from the stability and power experiments
 powerplot <- function(..., x_names = NA, xlab = NA, sampsize = NA, alpha = 0.05){
-  data <- list(...)
-  if(all(is.na(x_names))) x_names <- 1:length(data)
-  if(all(is.na(sampsize))) sampsize <- NULL
-  data_long <- vector(mode = "list", length = length(data))
-  for (i in 1:length(data)){
-    tmp <- apply(data[[i]], 2,  function(x, alpha) mean(x < alpha), alpha = alpha)
-    data_long[[i]] <- cbind(i, unlist(tmp), x_names)
+  data <- list(...) ### collect all stability experiments
+  if(all(is.na(x_names))) x_names <- 1:length(data) ### set default names for the number of trees when not specified
+  if(all(is.na(sampsize))) sampsize <- NULL ### set default for the sample size when not specified
+  data_long <- vector(mode = "list", length = length(data)) ### initialize
+  for (i in 1:length(data)){ ### for each stability experiment
+    tmp <- apply(data[[i]], 2,  function(x, alpha) mean(x < alpha), alpha = alpha) ### compute power over the columns (= number of trees)
+    data_long[[i]] <- cbind(i, unlist(tmp), x_names) ### display the power results in a long format
+    return(tmp)
   }
-  data_long <- do.call(rbind.data.frame, data_long)
-  colnames(data_long) <- c("exp", "power", "var")
+  data_long <- do.call(rbind.data.frame, data_long) ### concatenate all power results (row wise) in one matrix 
+  colnames(data_long) <- c("exp", "power", "var") ### assign names to each of the columns
   out <- ggplot(data = data_long, aes(x = var, y = power, colour = factor(exp))) + geom_line(linetype = "dashed") + geom_point() + 
-    ylim(c(0, 1)) + xlab(xlab) + ylab("Power") + scale_color_discrete(name = "Sample size", labels = sampsize)
+    ylim(c(0, 1)) + xlab(xlab) + ylab("Power") + scale_color_discrete(name = "Sample size", labels = sampsize) ### plot the results
   return(out)
 }
 ```
 
 ```{r}
-png("C:/Users/Thomas/Documents/Thesis/RF/Plots/RF_StabLDA.png")
-powerplot(StabLDA, x_names = n_tree, xlab = "Number of trees", sampsize = c(20))
+### function to plot results from the stability and power experiments
+powerplot <- function(data, x_names = NA, xlab = NA, alpha = 0.05){
+  if(all(is.na(x_names))) x_names <- 1:length(data) ### set default names for the number of trees when not specified
+  tmp <- apply(data, 2,  function(x, alpha) mean(x < alpha), alpha = alpha) ### compute power over the columns (= number of trees)
+  data_long <- as.data.frame(cbind(tmp, x_names)) ### display the power results in a long format
+  colnames(data_long) <- c("power", "var") ### assign names to each of the columns
+  out <- ggplot(data = data_long, aes(x = var, y = power)) + geom_line(linetype = "dashed") + geom_point() + 
+    ylim(c(0, 1)) + xlab(xlab) + ylab("Power") + theme_minimal() + theme(plot.title = element_text(face = "bold")) ### plot the results
+  return(out)
+}
+```
+
+```{r}
+plot_StabLDA <- powerplot(StabLDA, x_names = n_tree, xlab = "Number of trees")
+```
+
+```{r}
+plot_StabCS <- powerplot(StabCS, x_names = c(n_tree, 50000), xlab = "Number of trees")
+```
+
+```{r}
+pdf(paste0(wd,"RF_stab_combined.pdf"), onefile = FALSE)
+ggarrange(plot_StabLDA + ggtitle("A"), plot_StabCS + ggtitle("B"), nrow = 1, ncol = 2, common.legend = FALSE)
 dev.off()
 ```
 
-```{r}
-png("C:/Users/Thomas/Documents/Thesis/RF/Plots/RF_StabCS.png")
-powerplot(StabCS, x_names = c(n_tree, 50000), xlab = "Number of trees", sampsize = c(27))
-dev.off()
-```
-
-```{r}
-LDAtrees <- gentrees(LDAdata, n_tree = 10^5, leafsize = 3)
-LDAstat <- apply(LDAtrees, 2, function(x, y) S(X = as.matrix(x), y = y), y = matrix(LDAdata[, "y"]))
-```
-
-```{r}
-CStrees <- gentrees(CSdata, n_tree = 10^5, leafsize = 2)
-CSstat <- apply(CStrees, 2, function(x, y) S(X = as.matrix(x), y = y), y = matrix(CSdata[, "y"]))
-```
 
 ### Tree depth experiment
 
 ```{r}
 PowerExp <- function(mthd = "LDA", n_reps = 100, n_perms = 1000, n_tree = 250, leafsize = 1, maxdepth = NA, maxnodes = NA, nodesize = NA, ...){
-  indx_args <- c(length(n_tree) > 1, length(leafsize) > 1, length(maxdepth) > 1, length(maxnodes) > 1, length(nodesize) > 1)
+  indx_args <- c(length(n_tree) > 1, length(leafsize) > 1, length(maxdepth) > 1, length(maxnodes) > 1, length(nodesize) > 1) ### check whether only one varied is being varied
   if(sum(as.numeric(indx_args)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
-  var_name <- c("n_tree", "leafsize", "maxdepth", "maxnodes", "nodesize")[indx_args]
-  params <- cbind(n_tree, leafsize, maxdepth, maxnodes, nodesize)
-  pckgs <- as.vector(lsf.str(.GlobalEnv))
-  samp_ops <- list(...)
-  if(mthd == "LDA"){
+  var_name <- c("n_tree", "leafsize", "maxdepth", "maxnodes", "nodesize")[indx_args] ### retrieve variable name that is being varied
+  params <- cbind(n_tree, leafsize, maxdepth, maxnodes, nodesize) ### parameter space
+  pckgs <- as.vector(lsf.str(.GlobalEnv)) ### required for parallel computing
+  samp_ops <- list(...) ### collect all sampling options for LDA and CS in a list
+  if(mthd == "LDA"){ ### for the LDA method
     data <- lapply(1:n_reps, FUN = function(x, sampsize, p, effect) LDASamp(n_samples = sampsize, p = p,
-                   effect = effect), sampsize = samp_ops[["sampsize"]], p = samp_ops[["p"]], effect = samp_ops[["effect"]])
-  } else if(mthd == "CS"){
+                   effect = effect), sampsize = samp_ops[["sampsize"]], p = samp_ops[["p"]], effect = samp_ops[["effect"]]) ### LDA sampling n_reps times according to the specified parameters
+  } else if(mthd == "CS"){ ### for the CS method
      data <- lapply(1:n_reps, FUN = function(x, n_obs_clust, n_clusts) CheckerSamp(n = n_obs_clust, n_clusts = n_clusts),
-                   n_obs_clust = samp_ops[["n_obs_clust"]], n_clusts = samp_ops[["n_clusts"]])
-  } else {stop("No sampling method specified")}
+                   n_obs_clust = samp_ops[["n_obs_clust"]], n_clusts = samp_ops[["n_clusts"]]) ### CS sampling n_reps times according to the specified parameters
+  } else {stop("No sampling method specified")} ### check
   out <- 
     foreach(i = 1:n_reps, .combine = "rbind", .packages = "foreach", .export = pckgs) %dopar% {
-      data_sub <- data[[i]]
+      ### parallel loop for the replications
+      data_sub <- data[[i]] ### subset the data
       labs <- data_sub[, "y", drop = FALSE] ### extract labels
       regs <- data_sub[, !names(data_sub) %in% "y"] ### extract predictors
-      y <- matrix(residuals(lm(y ~ 1, data = labs)), nrow = nrow(labs))
-      y_perm <- sapply(1:(n_perms - 1), function(x, y) y[sample(nrow(y)), ,drop = FALSE], y = y)
-      foreach (j = 1:nrow(params), .combine = "c", .export = pckgs) %do% {
+      y <- matrix(residuals(lm(y ~ 1, data = labs)), nrow = nrow(labs)) ### orthogonalize with respect to the intercept
+      y_perm <- sapply(1:(n_perms - 1), function(x, y) y[sample(nrow(y)), ,drop = FALSE], y = y) ### generate permutations of y
+      foreach (j = 1:nrow(params), .combine = "c", .export = pckgs) %do% { ### sequential loop for elements from the varied parameter
         randomRF(regs = regs, y = y, y_perm = y_perm, params[[j, "n_tree"]], leafsize = params[[j, "leafsize"]],
-                 maxdepth = params[[j, "maxdepth"]], maxnodes = params[[j, "maxnodes"]], nodesize = params[[j, "nodesize"]])
+                 maxdepth = params[[j, "maxdepth"]], maxnodes = params[[j, "maxnodes"]], nodesize = params[[j, "nodesize"]]) ### compute p-value
       }
     }
-  out <- data.frame(out, row.names = NULL)
-  colnames(out) <- eval(parse(text = var_name))
+  out <- data.frame(out, row.names = NULL) ### coerce results into a data frame (= rows represent the elements of the varied paramater)
+  colnames(out) <- eval(parse(text = var_name)) ### set col names to the name of the varied paramater
   return(out)
 }
 ```
@@ -386,14 +158,8 @@ LDAs_depth <- PowerExp(mthd = "LDA", sampsize = 20, effect = 5, p = 2, n_reps = 
 ```
 
 ```{r}
-powerplot(LDAs_depth, x_names = c(seq(1, 10), 15, 10, 20), xlab = "Maximum tree depth", sampsize = 20)
+plot_LDAs_depth <- powerplot(LDAs_depth, x_names = c(seq(1, 10), 15, 10, 20), xlab = "Maximum tree depth")
 ```
-
-```{r}
-set.seed(1979418)
-LDAs_leaf5 <- PowerExp(mthd = "LDA", sampsize = 20, effect = 5, p = 2, n_reps = 100, leafsize = 5)
-```
-
 
 ```{r}
 set.seed(1979418)
@@ -401,123 +167,22 @@ CS_depth <- PowerExp(mthd = "CS", n_obs_clust = 15, n_clusts = 3, n_reps = 100, 
 ```
 
 ```{r}
-powerplot(CS_depth, x_names = c(seq(1, 10), 15, 25, 50, 80, 135), xlab = "Maximum tree depth", sampsize = 135)
+plot_CS_depth <- powerplot(CS_depth, x_names = c(seq(1, 10), 15, 25, 50, 80, 135), xlab = "Maximum tree depth")
 ```
 
 ```{r}
-set.seed(1979418)
-CS_leaf5 <- PowerExp(mthd = "CS", n_obs_clust = 15, n_clusts = 3, n_reps = 100, leafsize = 5)
+pdf(paste0(wd,"RF_depth_combined.pdf"), onefile = FALSE)
+ggarrange(plot_LDAs_depth + ggtitle("A") + scale_x_continuous(breaks = seq(-1, 20, by = 2)), 
+          plot_CS_depth + ggtitle("B") + scale_x_continuous(breaks = c(1, seq(15, 135, by = 15))), nrow = 1, ncol = 2, common.legend = FALSE)
+dev.off()
 ```
-
-
 
 ### Simulation experiment
 
 ```{r}
-### function to compute linear global test
-linear.gt <- function(regs, labs){
-  res <- gt(y~1, y~., data = data.frame(regs, y = labs)) ### linear global test
-  return(res@result[1])  ### return p-value
-}
-```
-
-```{r}
-### function to compute perform nested ridge
-nestedcv.ridge <- function(folds, regs, labs){
-  regs <- apply(regs, 2, as.numeric) ### makes sure all columns are numeric
-  n_folds <- max(folds) ### number of folds
-  res_outer <- numeric(n_folds) ### initialize output 
-  for(i in 1:n_folds){ 
-    log_indx <- folds != i ### create logical index for subset of the data
-    regs_sub <- as.matrix(regs[log_indx, ]) ### select regressor and put in right format
-    labs_sub <- labs[log_indx, , drop = TRUE] ### select labels
-    folds_sub <- rename_folds(folds[log_indx]) ### rename folds to 1, ... k - 1 (required for cv.glment)
-    res_cv <- glmnet::cv.glmnet(x = regs_sub, y = labs_sub, type.measure = "mse", foldid = folds_sub, alpha = 0) ### compute optimal lambda
-    preds <- predict(res_cv, as.matrix(regs[folds == i,]), s = "lambda.min") >= 0.5 ### make predictions for the validation set from a model with the optimal lambda
-    res_outer[i] <- mean(preds == labs[folds == i, , drop = TRUE]) ### compute average accuracy on outer validation set
-  }
-  return(mean(res_outer))
-}
-```
-
-```{r}
-fixedcv.rf <- function(folds, regs, labs, mtry = "sqrt(p)", nodesize = 1, n_tree = 250){
-  p <- ncol(regs)
-  mtry <- sapply(mtry, function(x, p) eval(parse(text = x)), p = p)
-
-
-  n_folds <- max(folds) ### total number of folds
-  res <- numeric(n_folds) ### initialize outerloop output
-  for(i in 1:n_folds){  ### for all folds
-    preds <- randomForest::randomForest(x = regs[folds != i,],  y = factor(labs[folds != i, , drop = TRUE]),
-                                      xtest = regs[folds == i,], ytest = factor(labs[folds == i, , drop = TRUE]),
-                                      mtry = mtry, nodesize = nodesize,
-                                      ntree = n_tree)[["test"]][["predicted"]] ### train on n_folds - 2
-    res[i] <- mean(preds == labs[folds == i, ])
-  }
-  return(mean(res))
-}
-```
-
-
-```{r}
-fixed.rf_gt <- function(regs, labs, leafsize = 1, n_perms = 1000, n_tree = 2500, maxdepth = 3, maxnodes = NA, nodesize = NA){
-  y <- matrix(as.numeric(labs[, "y"]))
-  y_perm <- sapply(1:(n_perms - 1), function(x, y) y[sample(nrow(y)), ,drop = FALSE], y = y)
-  
-  res <- randomRF(regs = regs, y = y, y_perm = y_perm, n_tree = n_tree, leafsize = leafsize, 
-                        maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize)
-  return(res)
-}
-```
-
-```{r}
-pval.rf_gt <- function(regs, labs, maxdepth = NA, n_perms = 1000, n_tree = 2500, balanced = TRUE, force = FALSE, leafsize = 1, maxnodes = NA, nodesize = NA){
-  i <- 1 ### arbitrarily choose a validation fold
-  folds <- create_folds(n_folds = 2, labs = labs, balanced = balanced, force = force) ### create folds such that the groups are balanced
-  indx_train <- folds != i
-  n_train <- sum(folds != i) ### compute the number of observations in each folds
-  if (all(is.na(maxdepth))) maxdepth <- c(seq(1, 7), 10)
-  y_train <- matrix(as.numeric(labs[indx_train, ]))
-  p_vals <- numeric(length(maxdepth)) ### initialize vector for p-values
-  
-  y_perm_train <- sapply(1:(n_perms - 1), function(x, y) y[sample(nrow(y)), ,drop = FALSE], y = y_train)
-  for (i in 1:length(maxdepth)){
-    p_vals[i] <- randomRF(regs = regs[indx_train, ], y = y_train, y_perm = y_perm_train, n_tree = 125, leafsize = leafsize, 
-                          maxdepth = maxdepth[i], maxnodes = maxnodes, nodesize = nodesize)
-
-  }
-  
-  optimal_depth <- maxdepth[which.min(p_vals)] ### select k which corresponds to smallest p-value
-  y_test <- matrix(as.numeric(labs[!indx_train, ]))
-  y_perm_test <- sapply(1:(n_perms - 1), function(x, y) y[sample(nrow(y)), ,drop = FALSE], y = y_test)
-  res <- randomRF(regs = regs[!indx_train, ], y = y_test, y_perm = y_perm_test, n_tree = n_tree, leafsize = leafsize, 
-                          maxdepth = optimal_depth, maxnodes = maxnodes, nodesize = nodesize)
-  return(res)
-}
-```
-
-```{r}
-overall.Sgt <- function(regs, labs, n_tree = 2500, maxdepth = NA, n_perms = 1000, leafsize = 1, maxnodes = NA, nodesize = NA){
-  pckgs <- as.vector(lsf.str(.GlobalEnv))
-  n <- nrow(regs)
-  y <- matrix(as.numeric(labs[["y"]]))
-  y_perm <- sapply(1:(n_perms - 1), function(x, y) y[sample(nrow(y)), ,drop = FALSE], y = y)
-  X <- gentrees(regs = regs, n_tree = 1, leafsize = leafsize, maxdepth = ceiling(runif(1, min = 0, max = 5)), maxnodes = maxnodes, nodesize = nodesize)
-  for(i in 1:(n_tree-1)){
-    X <- cbind(X, gentrees(regs = regs, n_tree = 1, leafsize = leafsize, maxdepth = ceiling(runif(1, min = 0, max = 5)), maxnodes = maxnodes, nodesize = nodesize))
-  }
-  S_t <- S(X, y)
-  S_p <- c(Inf, S(X, y_perm))
-  out <- mean(S_t*(1-1e-14) <= S_p)
-  return(out)
-}
-```
-
-
-```{r}
+### function to run all tests given some data
 SimExp <- function(data, n_reps, indx = NA, n_perms = 1000, ...){
-  pckgs <- as.vector(lsf.str(.GlobalEnv))
+  pckgs <- as.vector(lsf.str(.GlobalEnv)) ### required for parallel computation
   labs <- data[, "y", drop = FALSE] ### extract labels
   regs <- data[, !names(data) %in% "y"] ### extract predictors
   if(all(is.na(indx))){ ### if no index specified
@@ -555,443 +220,88 @@ SimExp <- function(data, n_reps, indx = NA, n_perms = 1000, ...){
 ```
 
 ```{r}
+### function for the LDA experiments --> power as function of the effect size, dimensionality or sample size
 LDASim <- function(sampsize, n_reps, effect, p, n_perms = 1000, ...){
-  indx_args <- c(length(p) > 1, length(effect) > 1, length(sampsize) > 1)
-  par_n_reps <- n_reps/4
+  indx_args <- c(length(p) > 1, length(effect) > 1, length(sampsize) > 1) ### check whether only one varied is being varied
   if(sum(as.numeric(indx_args)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
-  var_name <- c("p", "effect", "sampsize")[indx_args]
+  var_name <- c("p", "effect", "sampsize")[indx_args] ### retrieve variable name that is being varied
   params <- cbind(p, effect, sampsize) ### parameter space
-  out <- vector(mode = "list", length = nrow(params))
-  pckgs <- as.vector(lsf.str(.GlobalEnv))
-  start <- Sys.time()
-  for (i in 1:nrow(params)){
-    cat("Start element", i, "\n")
+  out <- vector(mode = "list", length = nrow(params)) ### generate list element for each element of the varied parameter
+  pckgs <- as.vector(lsf.str(.GlobalEnv)) ### required for parallel computing
+  start <- Sys.time() ### start time
+  for (i in 1:nrow(params)){ ### for each value of the varied parameter
+    cat("Start element", i, "\n") ### print start iteration element
     res <- foreach (j = 1:n_reps, .combine = "rbind", .export = pckgs, .packages = c("doParallel", "randomForest", "globaltest")) %dopar% {
-      data <- LDASamp(n_samples = params[i, "sampsize"], p = params[i, "p"], effect = params[i, "effect"])
-      SimExp(n_reps = 1, data = data, indx = NA, n_perms = n_perms, ...)
+      ### parallel loop for the replications
+      data <- LDASamp(n_samples = params[i, "sampsize"], p = params[i, "p"], effect = params[i, "effect"]) ### sample data according to some parameters
+      SimExp(n_reps = 1, data = data, indx = NA, n_perms = n_perms, ...) ### perform all tests
     }
-    out[[i]] <- EmpericalPower(res)
-    end <- Sys.time()
-    cat("Finished element", i, "\n")
-    print(end-start)
-    start <- end
+    out[[i]] <- EmpericalPower(res) ### compute power over all replications for some parameter
+    end <- Sys.time() ### end time
+    cat("Finished element", i, "\n") ### print end iteration element
+    print(end-start) ### return time difference
+    start <- end ### set end time to start time
   }
-  out <- do.call(rbind, out)
+  out <- do.call(rbind, out) ### return power results as matrix
   return(out)
 }
 ```
 
 ```{r}
+full_labs <- c("Fixed","Fixed cross-validation RF", "Linear GT",
+               "Nested cross-validation ridge regression", "Sampling overall", "P-value")
 set.seed(1979418)
 LDAS_p <- LDASim(sampsize = 40, n_reps = 100, effect = 5, p = c(2, 10, 25, 50, 100))
-png("C:/Users/Thomas/Documents/Thesis/RF/Plots/RF_LDASimDim.png")
-exprplot(data = LDAS_p, x_names = c(2, 10, 25, 50, 100), xlab = "Dimensionality")
-dev.off()
+plot_LDAS_p <- exprplot(data = LDAS_p, method = full_labs, x_names = c(2, 10, 25, 50, 100), xlab = "Dimensionality")
 ```
 
 ```{r}
 LDAS_effect <- LDASim(sampsize = 40, n_reps = 100, effect = c(5, 4, 3, 2, 1), p = 2)
-png("C:/Users/Thomas/Documents/Thesis/RF/Plots/RF_LDASimeffect.png")
-exprplot(data = LDAS_effect, x_names = c(5, 4, 3, 2, 1), xlab = "Effect size")
-dev.off()
+plot_LDAS_effect <- exprplot(data = LDAS_effect, method = full_labs, x_names = c(5, 4, 3, 2, 1), xlab = "Effect size")
 ```
 
 ```{r}
+### function for the checkerboard experiments --> power as function of the number of observations per tile or number of tiles
 CheckerSim <- function(n_reps, n, n_clusts, n_perms = 1000, ...){
-  indx_args <- c(length(n) > 1, length(n_clusts) > 1)
+  indx_args <- c(length(n) > 1, length(n_clusts) > 1) ### check whether only one varied is being varied
   if(sum(as.numeric(indx_args)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
-  var_name <- c("n", "n_clusts", "n_tree")[indx_args]
+  var_name <- c("n", "n_clusts", "n_tree")[indx_args] ### retrieve variable name that is being varied
   params <- cbind(n, n_clusts) ### parameter space
-  out <- vector(mode = "list", length = nrow(params))
-  pckgs <- as.vector(lsf.str(.GlobalEnv))
-  start <- Sys.time()
-  for (i in 1:nrow(params)){
-    cat("Start element", i, "\n")
-    res <- foreach (j = 1:n_reps, .combine = "rbind", .export = pckgs, .packages = c("doParallel", "randomForest", "globaltest")) %dopar% {
-      data <- CheckerSamp(n = params[[i, "n"]], n_clusts = params[[i, "n_clusts"]])
-      SimExp(n_reps = 1, data = data, indx = NA, n_perms = n_perms, ...)
+  out <- vector(mode = "list", length = nrow(params)) ### generate list element for each element of the varied parameter
+  pckgs <- as.vector(lsf.str(.GlobalEnv)) ### required for parallel computing
+  start <- Sys.time() ### start time
+  for (i in 1:nrow(params)){ ### for each value of the varied parameter
+    cat("Start element", i, "\n") ### print start iteration element
+    res <- foreach (j = 1:n_reps, .combine = "rbind", .export = pckgs, .packages = c("doParallel", "randomForest", "globaltest")) %dopar% { ### parallel loop for the replications
+      data <- CheckerSamp(n = params[[i, "n"]], n_clusts = params[[i, "n_clusts"]]) ### sample data according to some parameters
+      SimExp(n_reps = 1, data = data, indx = NA, n_perms = n_perms, ...) ### perform all tests
     }
-    out[[i]] <- EmpericalPower(res)
-    end <- Sys.time()
-    cat("Finished element", i, "\n")
-    print(end-start)
-    start <- end
+    out[[i]] <- EmpericalPower(res) ### compute power over all replications for some parameter
+    end <- Sys.time() ### end time
+    cat("Finished element", i, "\n") ### print end iteration element
+    print(end-start) ### return time difference
+    start <- end ### set end time to start time
   }
-  out <- do.call(rbind, out)
+  out <- do.call(rbind, out) ### return power results as matrix
   return(out)
 }
 ```
 
 ```{r}
 CBS_nclusts <- CheckerSim(n_reps = 100, n = 3, n_clusts = c(3, 5), force = TRUE)
-png("C:/Users/Thomas/Documents/Thesis/RF/Plots/RF_CheckerboardSimnclusts.png")
-exprplot(data = CBS_nclusts, x_names = c(3, 5), xlab = "Number of clusters")
-dev.off()
+plot_CBS_nclusts <- exprplot(data = CBS_nclusts, method = full_labs, x_names = c(3, 5), xlab = "Board length") + scale_x_continuous(breaks = c(3, 4,5))
 ```
 
 ```{r}
 set.seed(1979)
 CBS_n <- CheckerSim(n_reps = 100, n = c(2, 5, 10), n_clusts = 3, force = TRUE)
-png("C:/Users/Thomas/Documents/Thesis/RF/Plots/RF_CheckerboardSimN.png")
-exprplot(data = CBS_n, x_names = c(2, 5, 10), xlab = "Observations per tile")
+plot_CBS_n <- exprplot(data = CBS_n, method = full_labs, x_names = c(2, 5, 10), xlab = "Observations per tile")
+```
+
+```{r}
+pdf(paste0(wd,"RF_combined.pdf"), onefile = FALSE)
+ggarrange(plot_LDAS_p + ggtitle("A"), plot_LDAS_effect + ggtitle("B"), 
+          plot_CBS_n + ggtitle("C"), plot_CBS_nclusts + ggtitle("D"), nrow = 2, ncol = 2, common.legend = TRUE, legend = "bottom")
 dev.off()
-```
-
-
-```{r}
-gentrees <- function(regs, n_tree, maxdepth = NA, maxnodes = NA, nodesize = NA, leafsize = 1){
-  pckgs <- as.vector(lsf.str(.GlobalEnv))
-  out <- foreach(j = 1:n_tree, .combine = "cbind", .export = pckgs) %dopar% { ################## change back
-    splts <- gensplits(regs = regs, maxdepth = maxdepth, maxnodes = maxnodes, nodesize = nodesize, leafsize = leafsize)
-    sapply(splts, FUN = function(x) as.numeric(substr(x, nchar(x), nchar(x)) == 2))
-  }
-  out <- as.matrix(out)
-  colnames(out) <- NULL
-  rownames(out) <- NULL
-  return(out)
-}
-
-all.tests <- function(regs, labs, indx = NA, n_perms = 1000, ...){
-  res <- rep(NA, 6)
-  col_indx <- sapply(regs, is.numeric)
-  regs[, col_indx] <- scale(regs[, col_indx])
-  cntrs <- lapply(regs[, !col_indx], contrasts, contrasts = FALSE)
-  regs_alt <- model.matrix( ~ .-1, regs, contrasts.arg = cntrs)
-  pckgs <- as.vector(lsf.str(.GlobalEnv))
-  names(res) <- c("linear.gt", "nestedcv.ridge", "fixedcv.rf", "fixed.rf_gt", "pval.rf_gt", "overall.Sgt") ### assign names to the output matrix
-
-
-  folds_ridge <- create_folds(n_folds = 5, labs = labs, ...) ### create folds for functions that require cross validation
-  folds_rf <- create_folds(n_folds = 4, labs = labs, ...)
-  res[1] <- linear.gt(regs = regs_alt, labs = labs) ### compute p-value of the linear global test
-  ridge_stat <- nestedcv.ridge(folds = folds_ridge, regs = regs_alt, labs = labs) ### compute test statistic for the nested ridge
-  rf_stat <- fixedcv.rf(folds = folds_rf, regs = regs_alt, labs = labs) ### compute test statistic for the nested knn
-  res[4] <- fixed.rf_gt(regs = regs_alt, labs = labs, n_perms = n_perms)
-  res[5] <- pval.rf_gt(regs = regs_alt, labs = labs, n_perms = n_perms, ...)
-  res[6] <- overall.Sgt(regs = regs_alt, labs = labs, n_perms = n_perms)
-    
-  perm_mat <- foreach(j = 1:(n_perms-1), .combine = "cbind", .export = pckgs) %dopar% { ### for n_perms replications
-    perm_indx <- sample(nrow(labs)) ### permutation index
-    perm_regs <- regs_alt[perm_indx, ] ### permute regressors
-    perm_folds_ridge <- create_folds(n_folds = 5, labs = labs, ...) ### compute folds
-    perm_folds_rf <- create_folds(n_folds = 4, labs = labs, ...) ### compute folds
-    perm_ridge <- nestedcv.ridge(folds = perm_folds_ridge, regs = perm_regs, labs = labs) ### compute (permuted) test statistic for the nested ridge
-    perm_rf <- fixedcv.rf(folds = perm_folds_rf, regs = perm_regs, labs = labs) ### compute (permuted) test statistic for the nested knn
-    matrix(c(perm_ridge, perm_rf), nrow = 2) ### return permuted test statistics for both tests
-  }
-  
-  res[2] <- mean(ridge_stat*(1-1e-14) <= c(Inf, perm_mat[1, , drop = TRUE])) ### compute emperical p-value for nested ridge
-  res[3] <- mean(rf_stat*(1-1e-14) <= c(Inf, perm_mat[2, , drop = TRUE])) ### compute emperical p-value for nested knn
-  return(res)
-}
-all.tests(regs = regs, labs = labs, n_perms = 1000)
-```
-
-```{r}
-library(metamisc)
-data("impact")
-impact <- impact
-impact <- impact[, !names(impact) %in% c("name", "type")]
-impact <- impact[order(impact[, "mort"]), ]
-
-for (i in c("hypox", "hypots", "tsah", "edh")){
-  impact[, i] <- as.factor(impact[, i])
-}
-
-regs <- impact[c(1:20, 11003:11022), !names(impact) %in% c("mort")]
-labs <- impact[c(1:20, 11003:11022), c("mort"), drop = FALSE]
-names(labs) <- "y"
-folds <- create_folds(n_folds = 5, labs = labs)
-```
-
-
-```{r}
-library(metamisc)
-library(caret)
-data("impact")
-impact <- impact
-impact <- impact[, !names(impact) %in% c("name", "type")]
-impact <- impact[order(impact[, "mort"]), ]
-
-for (i in c("hypox", "hypots", "tsah", "edh")){
-  impact[, i] <- as.factor(impact[, i])
-}
-
-set.seed(89)
-n <- 30
-prop <- mean(impact$mort)
-n_1 <- round(n*prop)
-n_0 <- n - n_1
-indx <- split(seq(1, nrow(impact)), impact$mort)
-indx <- c(sample(indx[[1]], n_0), sample(indx[[2]], n_1))
-regs <- impact[indx, !names(impact) %in% c("mort")]
-labs <- impact[indx, c("mort"), drop = FALSE]
-names(labs) <- "y"
-
-real_res <- all.tests(regs = regs, labs = labs, n_perms = 1000, force = TRUE)
-```
-
-```{r}
-all.tests <- function(regs, labs, indx = NA, n_perms = 1000, ...){
-  res <- rep(NA, 12)
-  col_indx <- sapply(regs, is.numeric)
-  regs[, col_indx] <- scale(regs[, col_indx])
-  cntrs <- lapply(regs[, !col_indx], contrasts, contrasts = FALSE)
-  regs_alt <- model.matrix( ~ .-1, regs, contrasts.arg = cntrs)
-  pckgs <- as.vector(lsf.str(.GlobalEnv))
-  dist_mat <- comp_dist(regs) ### compute distance matrix
-  ord_mat <- knn_mat(dist_mat)
-  folds <- create_folds(n_folds = 5, labs = labs, ...) ### create folds for functions that require cross validation
-  names(res) <- c("linear.gt", "nestedcv.ridge", "fixedcv.rf", "fixed.rf_gt", "pval.rf_gt", "overall.Sgt",
-                  "nestedcv.knn", "prop.knn_gt", "pval.knn_gt", "overall.gt", "invoverall.gt", "overallordinal.gt") ### assign names to the output matrix
-
-
-  folds_ridge <- create_folds(n_folds = 5, labs = labs, ...) ### create folds for functions that require cross validation
-  folds_rf <- create_folds(n_folds = 4, labs = labs, ...)
-  res[1] <- linear.gt(regs = regs_alt, labs = labs) ### compute p-value of the linear global test
-  ridge_stat <- nestedcv.ridge(folds = folds_ridge, regs = regs_alt, labs = labs) ### compute test statistic for the nested ridge
-  rf_stat <- fixedcv.rf(folds = folds_rf, regs = regs_alt, labs = labs) ### compute test statistic for the nested knn
-  res[4] <- fixed.rf_gt(regs = regs_alt, labs = labs, n_perms = n_perms)
-  res[5] <- pval.rf_gt(regs = regs_alt, labs = labs, n_perms = n_perms, ...)
-  res[6] <- overall.Sgt(regs = regs_alt, labs = labs, n_perms = n_perms)
-  knn_stat <- nestedcv.knn(folds = folds, regs = regs, labs = labs) ### compute test statistic for the nested knn
-  res[8] <- prop.knn_gt(labs = labs, ord_mat = ord_mat) ### compute p-value for the global test on the partition matrix based on the label proportion
-  res[9] <- pval.knn_gt(regs = regs, labs = as_tibble(labs), ...) ### compute p-value for the global test based on the value of k which has the smallest p-value in the training set
-  res[c(10, 11)] <- overall.gt(labs = labs, ord_mat = ord_mat, invweighted = TRUE, n_perms = 1000) ### compute unweighted and inversely weighted overall gloval test
-  res[12] <- overallordinal.gt(labs = labs, ord_mat = ord_mat) ### compute unweighted and inversely weighted overall gloval test
-    
-  perm_mat <- foreach(j = 1:(n_perms-1), .combine = "cbind", .export = pckgs) %dopar% { ### for n_perms replications
-    perm_indx <- sample(nrow(labs)) ### permutation index
-    perm_regs <- regs_alt[perm_indx, ] ### permute regressors
-    perm_folds_ridge_knn <- create_folds(n_folds = 5, labs = labs, ...) ### compute folds
-    perm_folds_rf <- create_folds(n_folds = 4, labs = labs, ...) ### compute folds
-    perm_ridge <- nestedcv.ridge(folds = perm_folds_ridge_knn, regs = perm_regs, labs = labs) ### compute (permuted) test statistic for the nested ridge
-    perm_rf <- fixedcv.rf(folds = perm_folds_rf, regs = perm_regs, labs = labs) ### compute (permuted) test statistic for rf
-    perm_knn <- nestedcv.knn(folds = perm_folds_ridge_knn, regs = perm_regs, labs = labs) ### compute (permuted) test statistic for the nested knn
-    matrix(c(perm_ridge, perm_rf, perm_knn), nrow = 3) ### return permuted test statistics for both tests
-  }
-  
-  res[2] <- mean(ridge_stat*(1-1e-14) <= c(Inf, perm_mat[1, , drop = TRUE])) ### compute emperical p-value for nested ridge
-  res[3] <- mean(rf_stat*(1-1e-14) <= c(Inf, perm_mat[2, , drop = TRUE])) ### compute emperical p-value for nested knn
-  res[7] <- mean(knn_stat*(1-1e-14) <= c(Inf, perm_mat[3, , drop = TRUE]))
-  return(res)
-}
-```
-
-
-
-
-
-
-```{r}
-CheckerSim <- function(n_reps, n, n_clusts, ...){
-  indx_args <- c(length(n) > 1, length(n_clusts) > 1)
-  if(sum(as.numeric(indx_args)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
-  var_name <- c("n", "n_clusts")[indx_args]
-  params <- cbind(n, n_clusts) ### parameter space
-  out <- vector(mode = "list", length = nrow(params))
-  for (i in 1:nrow(params)){
-    sampsize <- params[[i, "n_clusts"]]^2 * params[[i, "n"]]
-    indx <- as.vector(sapply(1:n_reps, function(x, sampsize) rep(x, sampsize), sampsize = sampsize))
-    data <- lapply(1:n_reps, FUN = function(x, n, n_clusts) CheckerSamp(n = n, n_clusts = n_clusts),
-                   n = params[[i, "n"]], n_clusts = params[[i, "n_clusts"]])
-    data <- do.call(rbind, data)
-    tmp <- SimExp(n_reps = n_reps, data = data, indx = indx, ...)
-    out[[i]] <- EmpericalPower(tmp)
-  }
-  out <- do.call(rbind, out)
-  if(sum(as.numeric(indx_args)) > 0){
-    x_names <- c("Sample size", "Number of clusters")
-    out <- data.frame(out, params[, var_name])
-    colnames(out)[ncol(out)] <- var_name
-    out <- pivot_longer(out, !last_col(), names_to = "method", values_to = "RF")
-    out <- ggplot(data = out, aes(x = .data[[var_name]], y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point() +
-      ylim(c(0, 1)) + xlab(x_names[indx_args]) + ylab("Power") + scale_color_discrete(name = "Method")
-  }
-  return(out)
-}
-
-CheckerSim(n_reps = 1, n = 3, n_clusts = c(3, 5), force = TRUE)
-```
-
-```{r}
-LDASim <- function(sampsize, n_reps, effect, p, ...){
-  indx_args <- c(length(p) > 1, length(effect) > 1, length(sampsize) > 1)
-  if(sum(as.numeric(indx_args)) > 1) stop("Only one parameter can have multiple values") ### only allow for one parameter to take on multiple values
-  var_name <- c("p", "effect", "sampsize")[indx_args]
-  params <- cbind(p, effect, sampsize) ### parameter space
-  out <- vector(mode = "list", length = nrow(params))
-  for (i in 1:nrow(params)){
-    data <- LDASamp(n_samples = params[i, "sampsize"] * n_reps, p = params[i, "p"], effect = params[i, "effect"])
-    tmp <- SimExp(n_reps = n_reps, data = data, ...)
-    out[[i]] <- EmpericalPower(tmp)
-  }
-  out <- do.call(rbind, out)
-  if(sum(as.numeric(indx_args)) > 0){
-    x_names <- c("Dimensionality", "Effect", "Sample size")
-    out <- data.frame(out, params[, var_name])
-    colnames(out)[ncol(out)] <- var_name
-    out <- pivot_longer(out, !last_col(), names_to = "method", values_to = "RF")
-    out <- ggplot(data = out, aes(x = .data[[var_name]], y = RF, colour = method)) + geom_line(linetype = "dashed") + geom_point() + 
-      ylim(c(0, 1)) + xlab(x_names[indx_args]) + ylab("Power") + scale_color_discrete(name = "Method")
-  }
-  return(out)
-}
-tmp <- LDASim(sampsize = 20, n_reps = 1, effect = 25, p = c(2, 3))
-SimExp(tmp, 1, n_perms = 10, force = FALSE)
-```
-
-
-```{r}
-LDA20 <- LDASamp(40, 100, 25)
-regs <- LDA20[, !names(LDA20) %in% "y"]
-labs <- LDA20[, "y", drop = FALSE]
-system.time(gentrees(regs, 10000))
-folds <- create_folds(2, labs)
-nestedcv.rf(folds = folds, regs = regs, labs = labs)
-```
-
-
-
-
-
-
-```{r}
-nestedcv.rf <- function(folds, regs, labs, mtry = c("p", "p/3", "sqrt(p)"), nodesize = c(5, 1), n_tree = c(250, 500)){
-  p <- ncol(regs)
-  mtry <- sapply(mtry, function(x, p) eval(parse(text = x)), p = p)
-  mtry <- unique(round(mtry))
-  if (length(mtry) > 2) mtry <- mtry[-1]
-  grid_params <- expand.grid(mtry = mtry,
-                            nodesize = nodesize,
-                            ntree = n_tree)
-
-  n_folds <- max(folds) ### total number of folds
-  res_outer <- numeric(n_folds) ### initialize outerloop output
-  fold_id <- seq(1, n_folds) ### create fold numbers for innerloop
-  for(i in 1:n_folds){  ### for all folds
-    res_inner <- matrix(NA, nrow = n_folds - 1, ncol = nrow(grid_params)) ### initialize innerloop output matrix
-    for(j in 1:(n_folds - 1)){ ### for all folds - 1 (excluding one outer validations set)
-      for(k in 1:nrow(grid_params)){ ### for every neighbour
-        indx <- fold_id[fold_id != i]  ### exclude outer validation set
-        return((folds %in% indx[-j]))
-        return(regs[(folds %in% indx[-j]),])
-        tmp <- randomForest::randomForest(x = regs[(folds %in% indx[-j]),],  y = labs[(folds %in% indx[-j]), ],
-                                          xtest = regs[(folds == indx[j]),], ytest = labs[folds == indx[j], ],
-                                          mtry = grid_params[[k, "mtry"]], nodesize = grid_params[[k, "nodesize"]],
-                                          ntree = grid_params[[k, "ntree"]]) ### train on n_folds - 2
-        res_inner[j, k] <- mean(tmp[["test"]][["predicted"]] != labs[folds == indx[j], ]) ### validate on innerloop validation set
-      }
-    }
-    res_inner <- apply(res_inner, MARGIN = 2, mean) ### compute average misclassification rate over the innerloop folds
-    opt_params <- grid_params[which.min(res_inner), ]
-    preds <- randomForest::randomForest(x = regs[folds != i,],  y = labs[folds != i, ],
-                                        xtest = regs[folds == i,], ytest = labs[folds == i, ],
-                                        mtry = opt_params[["mtry"]], nodesize = opt_params[["nodesize"]],
-                                        ntree = opt_params [["ntree"]])[["test"]][["predicted"]]
-    res_outer[i] <- mean(as.numeric(preds >= 0.5) == labs[folds == i, ])  ### compute average accuracy on outer validation set
-  }
-  return(mean(res_outer))
-}
-```
-
-
-
-
-
-
-
-
-
-
-```{r}
-nestedcv.rf <- function(folds, regs, labs, mtry = c("p", "p/3", "sqrt(p)"), nodesize = c(5, 1), n_tree = c(250)){
-  p <- ncol(regs)
-  mtry <- sapply(mtry, function(x, p) eval(parse(text = x)), p = p)
-  mtry <- unique(round(mtry))
-  if (length(mtry) > 2) mtry <- mtry[-1]
-  grid_params <- expand.grid(mtry = mtry,
-                            nodesize = nodesize,
-                            ntree = n_tree)
-
-  n_folds <- max(folds) ### total number of folds
-  res_outer <- numeric(n_folds) ### initialize outerloop output
-  fold_id <- seq(1, n_folds) ### create fold numbers for innerloop
-  for(i in 1:n_folds){  ### for all folds
-    res_inner <- matrix(NA, nrow = n_folds - 1, ncol = nrow(grid_params)) ### initialize innerloop output matrix
-    for(j in 1:(n_folds - 1)){ ### for all folds - 1 (excluding one outer validations set)
-      for(k in 1:nrow(grid_params)){ ### for every neighbour
-        indx <- fold_id[fold_id != i]  ### exclude outer validation set
-        tmp <- randomForest::randomForest(x = regs[(folds %in% indx[-j]),],  y = labs[(folds %in% indx[-j]), ],
-                                          xtest = regs[(folds == indx[j]),], ytest = labs[folds == indx[j], ],
-                                          mtry = grid_params[[k, "mtry"]], nodesize = grid_params[[k, "nodesize"]],
-                                          ntree = grid_params[[k, "ntree"]]) ### train on n_folds - 2
-        res_inner[j, k] <- mean(tmp[["test"]][["predicted"]] != labs[folds == indx[j], ]) ### validate on innerloop validation set
-      }
-    }
-    res_inner <- apply(res_inner, MARGIN = 2, mean) ### compute average misclassification rate over the innerloop folds
-    opt_params <- grid_params[which.min(res_inner), ]
-    preds <- randomForest::randomForest(x = regs[folds != i,],  y = labs[folds != i, ],
-                                        xtest = regs[folds == i,], ytest = labs[folds == i, ],
-                                        mtry = opt_params[["mtry"]], nodesize = opt_params[["nodesize"]],
-                                        ntree = opt_params [["ntree"]])[["test"]][["predicted"]]
-    res_outer[i] <- mean(as.numeric(preds >= 0.5) == labs[folds == i, ])  ### compute average accuracy on outer validation set
-  }
-  return(mean(res_outer))
-}
-```
-
-
-```{r}
-set.seed(1979418)
-CSdata <- CheckerSamp(n = 4, n_clusts = 3)
-StabCS1 <- StabExp(n_tree = c(50, 100, 250, 500, 1000, 2500, 5000, 10000), data = CSdata, n_reps = 10, leafsize = 3)
-EmpericalPower(StabCS1)
-```
-
-
-
-```{r}
-library(tree)
-tmp <- tree(y ~ x1 + x2 ,data = LDA20, mincut = 1, minsize = 2)
-plot(tmp)
-text(tmp)
-
-nestedcv.tree <- function(folds, regs, labs, leafsize = c(5, 1), split = c("deviance", "gini")){
-  grid_params <- expand.grid(mincut = leafsize,
-                            split = split)
-  n_folds <- max(folds) ### total number of folds
-  res_outer <- numeric(n_folds) ### initialize outerloop output
-  fold_id <- seq(1, n_folds) ### create fold numbers for innerloop
-  for(i in 1:n_folds){  ### for all folds
-    res_inner <- matrix(NA, nrow = n_folds - 1, ncol = nrow(grid_params)) ### initialize innerloop output matrix
-    for(j in 1:(n_folds - 1)){ ### for all folds - 1 (excluding one outer validations set)
-      for(k in 1:nrow(grid_params)){ ### for every neighbour
-        indx <- fold_id[fold_id != i]  ### exclude outer validation set
-        tmp <- tree::tree(y ~ ., data = cbind.data.frame(labs[(folds %in% indx[-j]), , drop = FALSE], regs[(folds %in% indx[-j]),]), 
-                          mincut = grid_params[[k, "mincut"]], minsize = 2*grid_params[[k, "mincut"]],
-                          split = as.character(grid_params[[k, "split"]])) ### train on n_folds - 2
-        
-        res_inner[j, k] <- mean(predict(tmp, regs[(folds %in% indx[j]),]) != labs[folds == indx[j], ]) ### validate on innerloop validation set
-      }
-    }
-    res_inner <- apply(res_inner, MARGIN = 2, mean) ### compute average misclassification rate over the innerloop folds
-    opt_params <- grid_params[which.min(res_inner), ]
-    model <- tree::tree(y ~ ., data = cbind.data.frame(labs[folds != i, , drop = FALSE], regs[folds != i,] ),
-                        mincut = opt_params[["mincut"]], minsize = 2*opt_params[["mincut"]],
-                        split = as.character(opt_params[["split"]]))
-    preds <- predict(model, regs[folds == i,])
-    res_outer[i] <- mean(preds == labs[folds == i, ])  ### compute average accuracy on outer validation set
-  }
-  return(mean(res_outer))
-}
-nestedcv.tree(folds, regs, labs)
-```
-
-
-```{r}
-labs <- LDA20[, "y", drop = FALSE]
-regs <- LDA20[,  !colnames(LDA20) %in% "y"]
-folds <- create_folds(n_folds = 5, labs, balanced = TRUE, force = FALSE)
 ```
 
